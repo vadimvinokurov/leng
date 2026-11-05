@@ -10,7 +10,10 @@ on:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    # The full gate builds both client crates; leng-core's platform layer
+    # and the tauri crate are macOS-only by design (PROJECT.md §3), so
+    # the gate must run on macOS. Free for public repos.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
