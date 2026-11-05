@@ -5,17 +5,23 @@ each command contributes one route through its builder, with token
 authentication attached when the command requires it.
 """
 
-from collections.abc import Callable
+import logging
+import threading
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app import mirror
 from app.commands import registry
 from app.commands.registry import AppContext, CommandError
 from app.config import Config
 from app.db import apply_migrations, connect
 from app.llm.base import LLMClient
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -23,19 +29,44 @@ def _utcnow() -> datetime:
 
 
 def create_app(
-    cfg: Config, llm: LLMClient, clock: Callable[[], datetime] = _utcnow
+    cfg: Config,
+    llm: LLMClient,
+    clock: Callable[[], datetime] = _utcnow,
+    mirror_transport: mirror.Transport | None = None,
 ) -> FastAPI:
     """Wire the database and an LLM client into the API application.
 
     `clock` supplies the current time to each query and defaults to the
     real UTC clock; tests inject a fixed clock for deterministic
     timestamps.
+
+    `mirror_transport` replaces the production GitHub transport in tests.
+    A release-version server mirrors its own release at startup — inline
+    when a transport was injected (deterministic tests), in a daemon
+    thread otherwise (startup never waits on the network).
     """
     bootstrap = connect(cfg.db_path)
     apply_migrations(bootstrap)
     bootstrap.close()
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if cfg.version != "dev":
+
+            def run_sync() -> None:
+                transport = mirror_transport or mirror.HttpxTransport()
+                try:
+                    mirror.sync_mirror(cfg, transport)
+                except (mirror.MirrorError, mirror.TransportError) as exc:
+                    logger.warning("release mirror sync failed: %s", exc)
+
+            if mirror_transport is not None:
+                run_sync()
+            else:
+                threading.Thread(target=run_sync, daemon=True).start()
+        yield
+
+    app = FastAPI(lifespan=lifespan)
 
     @app.exception_handler(HTTPException)
     def http_error(_: Request, exc: HTTPException) -> JSONResponse:
