@@ -4,6 +4,7 @@
 //! errors included), 2 on a usage error (usage goes to stderr).
 
 use leng_core::api::BackendClient;
+use leng_core::config::{resolve, CliOverrides, StdEnv};
 use leng_core::pipeline::{process, Hud, HudPayload};
 use leng_core::types::Source;
 
@@ -21,7 +22,7 @@ impl Hud for CliHud {
 }
 
 const USAGE: &str = "\
-usage: leng-cli trigger --text TEXT --base-url URL --token TOKEN \
+usage: leng-cli trigger --text TEXT [--base-url URL] [--token TOKEN] \
 [--app NAME] [--client-name NAME]";
 
 #[tokio::main]
@@ -66,12 +67,32 @@ async fn trigger(args: &[String]) -> i32 {
         *slot = Some(value);
     }
 
-    let (Some(text), Some(base_url), Some(token)) = (text, base_url, token) else {
+    let Some(text) = text else {
         eprintln!("{USAGE}");
         return 2;
     };
+    let overrides = CliOverrides {
+        base_url: base_url.map(str::to_string),
+        token: token.map(str::to_string),
+    };
+    // config.json lives next to the executable, per the deployment spec.
+    let config_path = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::PathBuf::from))
+        .map(|dir| dir.join("config.json"));
+    let resolved = match resolve(overrides, config_path.as_deref(), &StdEnv) {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            eprintln!("config error: {err}");
+            return 2;
+        }
+    };
 
-    let api = BackendClient::new(base_url, token);
+    let api = BackendClient::new(
+        &resolved.base_url,
+        &resolved.token,
+        &resolved.client_version,
+    );
     let source = Source {
         app: app.unwrap_or("unknown").to_string(),
         title: None,

@@ -3,7 +3,7 @@
 use serde_json::Value;
 use std::time::Duration;
 
-use crate::types::{ApiError, QueryResponse, Source};
+use crate::types::{ApiError, Health, QueryResponse, Source};
 
 /// Total deadline for one backend call.
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(12);
@@ -14,14 +14,16 @@ const UNPARSED_BODY_MAX_CHARS: usize = 200;
 pub struct BackendClient {
     base_url: String,
     token: String,
+    client_version: String,
     http: reqwest::Client,
 }
 
 impl BackendClient {
-    pub fn new(base_url: &str, token: &str) -> Self {
+    pub fn new(base_url: &str, token: &str, client_version: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.to_string(),
+            client_version: client_version.to_string(),
             http: reqwest::Client::builder()
                 .timeout(TOTAL_TIMEOUT)
                 .build()
@@ -39,6 +41,7 @@ impl BackendClient {
             .http
             .post(format!("{}/v1/query", self.base_url))
             .header("X-Api-Token", &self.token)
+            .header("X-Client-Version", &self.client_version)
             .json(&serde_json::json!({
                 "raw_text": text,
                 "source": source,
@@ -62,6 +65,31 @@ impl BackendClient {
         // bodies separately from transport failures.
         response
             .json::<QueryResponse>()
+            .await
+            .map_err(|err| ApiError::Network(format!("invalid response body: {err}")))
+    }
+
+    /// GET /v1/health: public, no token; the server version powers the
+    /// update decision.
+    pub async fn health(&self) -> Result<Health, ApiError> {
+        let response = self
+            .http
+            .get(format!("{}/v1/health", self.base_url))
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(err) => return Err(transport_error(&err)),
+        };
+
+        if !response.status().is_success() {
+            return Err(ApiError::Status(
+                response.status().as_u16(),
+                error_code(response).await,
+            ));
+        }
+        response
+            .json::<Health>()
             .await
             .map_err(|err| ApiError::Network(format!("invalid response body: {err}")))
     }

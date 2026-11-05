@@ -32,3 +32,10 @@ pub enum ApiError {
     Status(u16, String),
     Network(String),
 }
+
+/// GET /v1/health answer: the server version powers the update decision.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Health {
+    pub status: String,
+    pub version: String,
+}

@@ -56,7 +56,7 @@ async fn trigger_word_shows_response_payload_as_json() {
         })))
         .mount(&server)
         .await;
-    let api = BackendClient::new(&server.uri(), "secret");
+    let api = BackendClient::new(&server.uri(), "secret", env!("CARGO_PKG_VERSION"));
     let hud = JsonLineHud::new();
 
     process("throughput", &api, &hud, &source(), "leng-cli").await;
@@ -84,7 +84,7 @@ async fn trigger_empty_text_shows_error_json_without_api_call() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
         .mount(&server)
         .await;
-    let api = BackendClient::new(&server.uri(), "secret");
+    let api = BackendClient::new(&server.uri(), "secret", env!("CARGO_PKG_VERSION"));
     let hud = JsonLineHud::new();
 
     process("   ", &api, &hud, &source(), "leng-cli").await;

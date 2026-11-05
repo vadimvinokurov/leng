@@ -141,7 +141,11 @@ fn resolve_api() -> Option<Arc<BackendClient>> {
     let url = non_empty_env("LENG_BACKEND_URL");
     let token = non_empty_env("LENG_API_TOKEN");
     match (url, token) {
-        (Some(url), Some(token)) => Some(Arc::new(BackendClient::new(&url, &token))),
+        (Some(url), Some(token)) => Some(Arc::new(BackendClient::new(
+            &url,
+            &token,
+            env!("CARGO_PKG_VERSION"),
+        ))),
         _ => None,
     }
 }

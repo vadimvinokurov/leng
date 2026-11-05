@@ -6,6 +6,8 @@ use serde_json::json;
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+const VERSION: &str = "0.2.0";
+
 fn source() -> Source {
     Source {
         app: "tester".into(),
@@ -39,7 +41,7 @@ async fn happy_payload_deserializes_exactly() {
         .mount(&server)
         .await;
     // Trailing slash exercises the base_url normalization in `new`.
-    let client = BackendClient::new(&format!("{}/", server.uri()), "secret");
+    let client = BackendClient::new(&format!("{}/", server.uri()), "secret", VERSION);
 
     let response = client.query("hello", &source(), "leng-cli").await;
 
@@ -66,7 +68,7 @@ async fn unauthorized_maps_to_status() {
         .respond_with(ResponseTemplate::new(401).set_body_json(json!({"error": "unauthorized"})))
         .mount(&server)
         .await;
-    let client = BackendClient::new(&server.uri(), "wrong-token");
+    let client = BackendClient::new(&server.uri(), "wrong-token", VERSION);
 
     let response = client.query("hello", &source(), "leng-cli").await;
 
@@ -81,7 +83,7 @@ async fn text_too_long_maps_to_status_with_body_code() {
         .respond_with(ResponseTemplate::new(400).set_body_json(json!({"error": "text_too_long"})))
         .mount(&server)
         .await;
-    let client = BackendClient::new(&server.uri(), "secret");
+    let client = BackendClient::new(&server.uri(), "secret", VERSION);
 
     let response = client.query("hello", &source(), "leng-cli").await;
 
@@ -104,7 +106,7 @@ async fn unresponsive_backend_maps_to_timeout() {
         drop(conn);
     });
 
-    let client = BackendClient::new(&format!("http://{addr}"), "secret");
+    let client = BackendClient::new(&format!("http://{addr}"), "secret", VERSION);
 
     let response = client.query("hello", &source(), "leng-cli").await;
 
@@ -123,7 +125,7 @@ async fn connection_dropped_mid_exchange_maps_to_network() {
         drop(conn);
     });
 
-    let client = BackendClient::new(&format!("http://{addr}"), "secret");
+    let client = BackendClient::new(&format!("http://{addr}"), "secret", VERSION);
 
     let response = client.query("hello", &source(), "leng-cli").await;
 
@@ -131,4 +133,42 @@ async fn connection_dropped_mid_exchange_maps_to_network() {
         Err(ApiError::Network(_)) => {}
         other => panic!("expected ApiError::Network, got {other:?}"),
     }
+}
+
+/// The client must identify its version on every query: the release
+/// server uses this header to gate clients of the wrong version.
+#[tokio::test]
+async fn client_version_header_sent_on_query() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/query"))
+        .and(header("x-client-version", VERSION))
+        .respond_with(ResponseTemplate::new(200).set_body_json(happy_body()))
+        .mount(&server)
+        .await;
+    let client = BackendClient::new(&server.uri(), "secret", VERSION);
+
+    let response = client.query("hello", &source(), "leng-cli").await;
+
+    assert!(response.is_ok(), "matching version must be accepted");
+}
+
+/// GET /v1/health carries the server version (no token) and powers the
+/// update decision.
+#[tokio::test]
+async fn health_reports_server_version() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/health"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "ok", "version": "1.2.0"
+        })))
+        .mount(&server)
+        .await;
+    let client = BackendClient::new(&server.uri(), "secret", VERSION);
+
+    let health = client.health().await.expect("health must parse");
+
+    assert_eq!(health.status, "ok");
+    assert_eq!(health.version, "1.2.0");
 }

@@ -41,7 +41,7 @@ async fn empty_text_shows_error_without_calling_backend() {
         .respond_with(ResponseTemplate::new(500).set_body_json(json!({"error": "empty_text"})))
         .mount(&server)
         .await;
-    let api = BackendClient::new(&server.uri(), "secret");
+    let api = BackendClient::new(&server.uri(), "secret", env!("CARGO_PKG_VERSION"));
     let hud = CaptureHud::new();
 
     process("   \t ", &api, &hud, &source(), "leng-cli").await;
@@ -72,7 +72,7 @@ async fn successful_query_shows_response() {
         })))
         .mount(&server)
         .await;
-    let api = BackendClient::new(&server.uri(), "secret");
+    let api = BackendClient::new(&server.uri(), "secret", env!("CARGO_PKG_VERSION"));
     let hud = CaptureHud::new();
 
     process("  hello  ", &api, &hud, &source(), "leng-cli").await;
@@ -101,7 +101,7 @@ async fn server_error_shows_message_including_status() {
         .respond_with(ResponseTemplate::new(502).set_body_json(json!({"error": "llm_error"})))
         .mount(&server)
         .await;
-    let api = BackendClient::new(&server.uri(), "secret");
+    let api = BackendClient::new(&server.uri(), "secret", env!("CARGO_PKG_VERSION"));
     let hud = CaptureHud::new();
 
     process("hello", &api, &hud, &source(), "leng-cli").await;

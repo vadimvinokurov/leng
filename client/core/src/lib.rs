@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod capture;
+pub mod config;
 pub mod guard;
 pub mod pipeline;
 pub mod platform;
