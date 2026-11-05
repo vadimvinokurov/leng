@@ -1,0 +1,65 @@
+# Client releases on v* tags. Publishes immediately (not a draft):
+# releases/latest/download/latest.json must resolve the moment the tag
+# lands. The server mirrors the release of its own version, so this
+# workflow is the only place client binaries are ever built.
+name: release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must equal version in tauri.conf.json
+        run: |
+          conf=$(python3 -c "import json; print(json.load(open('client/src-tauri/tauri.conf.json'))['version'])")
+          # The version protocol uses bare semver everywhere; compare
+          # without the leading "v".
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$conf" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match version ${conf} in tauri.conf.json"
+            exit 1
+          fi
+
+  build:
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            tauri_args: --target aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            tauri_args: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --locked
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: client
+          tauriScript: cargo tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.tauri_args }}
