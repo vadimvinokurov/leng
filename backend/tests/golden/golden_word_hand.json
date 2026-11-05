@@ -1,0 +1,11 @@
+{
+  "__comment": "computed by hand, 2026-11-05; values asserted independently of any engine output (PROJECT_CONCEPT: человек переводит 'throughput' как 'пропускная способность' — словарное значение); note composed per PROJECT_CONCEPT's one-technical-note rule, not copied",
+  "kind": "word",
+  "canonical": "throughput",
+  "response": {
+    "main": "пропускная способность",
+    "notes": [
+      "В контексте распределённых систем (Kafka) — объём сообщений, обрабатываемых в единицу времени; часто не переводится."
+    ]
+  }
+}

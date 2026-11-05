@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Leng HUD</title>
+  <link rel="stylesheet" href="hud.css" />
+</head>
+<body>
+  <div class="hud">
+    <main class="hud__content">
+      <div id="loading" class="hud__loading">
+        <div class="hud__spinner" role="status" aria-label="Загрузка"></div>
+      </div>
+
+      <!-- The entire payload view (tab header + content) is rendered by
+           Rust (leng_core::render) and inserted here on leng:payload. -->
+      <div id="content"></div>
+    </main>
+  </div>
+
+  <script src="hud.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "query_id": 1,
+  "kind": "paragraph",
+  "canonical": null,
+  "response": {
+    "main": "цельный перевод абзаца с сохранением смысла",
+    "notes": []
+  },
+  "soft_mode": false
+}

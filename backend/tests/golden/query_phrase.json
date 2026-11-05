@@ -1,0 +1,10 @@
+{
+  "query_id": 1,
+  "kind": "phrase",
+  "canonical": "to be about to",
+  "response": {
+    "main": "собираться сделать что-то",
+    "notes": []
+  },
+  "soft_mode": false
+}

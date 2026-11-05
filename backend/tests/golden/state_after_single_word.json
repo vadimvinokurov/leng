@@ -1,0 +1,47 @@
+{
+  "queries": [
+    {
+      "id": 1,
+      "created_at": "2026-11-05T12:00:00+00:00",
+      "raw_text": "__WORD_CASE__ throughput",
+      "kind": "word",
+      "source_app": "golden-app",
+      "source_title": null,
+      "source_url": null,
+      "client": "golden-runner",
+      "translation": {
+        "main": "пропускная способность",
+        "notes": [
+          "В контексте распределённых систем (Kafka) — объём сообщений, обрабатываемых в единицу времени; часто не переводится."
+        ]
+      },
+      "latency_ms": 0,
+      "mode": "instant"
+    }
+  ],
+  "words": [
+    {
+      "id": 1,
+      "canonical": "throughput",
+      "first_query_id": 1,
+      "created_at": "2026-11-05T12:00:00+00:00",
+      "occurrences": 1,
+      "last_seen_at": "2026-11-05T12:00:00+00:00",
+      "status": "active",
+      "blocked_reason": null
+    }
+  ],
+  "links": [
+    {
+      "query_id": 1,
+      "word_id": 1
+    }
+  ],
+  "cache": [
+    {
+      "canonical": "__word_case__ throughput",
+      "lang": "en->ru",
+      "translation_json": "{\"canonical\": \"throughput\", \"main\": \"\\u043f\\u0440\\u043e\\u043f\\u0443\\u0441\\u043a\\u043d\\u0430\\u044f \\u0441\\u043f\\u043e\\u0441\\u043e\\u0431\\u043d\\u043e\\u0441\\u0442\\u044c\", \"notes\": [\"\\u0412 \\u043a\\u043e\\u043d\\u0442\\u0435\\u043a\\u0441\\u0442\\u0435 \\u0440\\u0430\\u0441\\u043f\\u0440\\u0435\\u0434\\u0435\\u043b\\u0451\\u043d\\u043d\\u044b\\u0445 \\u0441\\u0438\\u0441\\u0442\\u0435\\u043c (Kafka) \\u2014 \\u043e\\u0431\\u044a\\u0451\\u043c \\u0441\\u043e\\u043e\\u0431\\u0449\\u0435\\u043d\\u0438\\u0439, \\u043e\\u0431\\u0440\\u0430\\u0431\\u0430\\u0442\\u044b\\u0432\\u0430\\u0435\\u043c\\u044b\\u0445 \\u0432 \\u0435\\u0434\\u0438\\u043d\\u0438\\u0446\\u0443 \\u0432\\u0440\\u0435\\u043c\\u0435\\u043d\\u0438; \\u0447\\u0430\\u0441\\u0442\\u043e \\u043d\\u0435 \\u043f\\u0435\\u0440\\u0435\\u0432\\u043e\\u0434\\u0438\\u0442\\u0441\\u044f.\"]}"
+    }
+  ]
+}

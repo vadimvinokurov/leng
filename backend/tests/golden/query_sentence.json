@@ -1,0 +1,10 @@
+{
+  "query_id": 1,
+  "kind": "sentence",
+  "canonical": null,
+  "response": {
+    "main": "цельный перевод",
+    "notes": []
+  },
+  "soft_mode": false
+}

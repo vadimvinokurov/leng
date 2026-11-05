@@ -1,0 +1,46 @@
+[project]
+name = "leng-backend"
+version = "0.1.0"
+description = "Leng personal EN->RU translator backend"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "httpx",
+  "pydantic>=2",
+]
+
+# Lint gate (rule 5). Correctness-oriented rule classes only; style-only
+# conflicts are disabled here with justification (see per-file-ignores).
+[dependency-groups]
+dev = ["pytest", "ruff", "mypy"]
+
+# Static type gate (rule 5): the whole app/ package is checked strict.
+# Any escape (`# type: ignore[code]`) must carry an adjacent justification
+# comment explaining why the dynamic boundary is real.
+[tool.mypy]
+strict = true
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+files = ["app"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "ARG", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Golden fixtures are data snapshots, not code.
+"tests/golden/**" = ["ALL"]
+# Tests: pytest fixtures are injected by name (ARG001) and test strings are
+# Russian on purpose — RUF001's homoglyph detector false-positives on any
+# Cyrillic/Latin lookalike in legitimate Russian text.
+"tests/**" = ["ARG001", "RUF001"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

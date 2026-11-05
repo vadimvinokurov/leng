@@ -1,0 +1,152 @@
+/* Leng HUD: dark always-on-top overlay, fixed 380x260 logical px. */
+
+:root {
+  --hud-bg: rgba(24, 24, 28, 0.96);
+  /* Opaque twin of --hud-bg: the sticky tab row paints above the scrolling
+     text (inside the panel), so a translucent background there would let
+     one layer of text bleed through — unlike --hud-bg, which sits on the
+     opaque window base. */
+  --hud-bg-solid: #18181c;
+  --hud-surface: rgba(255, 255, 255, 0.06);
+  --hud-text: #f4f4f6;
+  --hud-text-muted: #a3a3ad;
+  --hud-accent: #6d5ae6;
+  --hud-danger: #ff8a80;
+  --hud-border: rgba(255, 255, 255, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+/* Section toggling uses the hidden attribute; authored display rules would
+   otherwise override the UA default. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--hud-text);
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+.hud {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 16px 16px;
+  background: var(--hud-bg);
+  border: 1px solid var(--hud-border);
+  border-radius: 12px;
+}
+
+/* Tabs: «Перевод» active, «Разбор» present but disabled (MVP-2).
+   Pinned to the top of the scroll container: the tab row is the first node
+   of the Rust-rendered fragment inside #content, so without sticky it
+   scrolls away with long translations. The solid background (the opaque
+   twin of the panel token) keeps the scrolled text from bleeding through. */
+.hud__tabs {
+  position: sticky;
+  top: 0;
+  background: var(--hud-bg-solid);
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hud-border);
+  user-select: none;
+}
+
+.hud__tab {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--hud-text-muted);
+}
+
+.hud__tab--active {
+  color: var(--hud-text);
+  background: var(--hud-surface);
+  font-weight: 600;
+}
+
+.hud__tab--disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.hud__content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 16px;
+}
+
+.hud__loading {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hud__spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--hud-surface);
+  border-top-color: var(--hud-accent);
+  border-radius: 50%;
+  animation: hud-spin 0.8s linear infinite;
+}
+
+@keyframes hud-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud__spinner {
+    animation-duration: 3s;
+  }
+}
+
+.hud__main {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.hud__notes {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  color: var(--hud-text-muted);
+  font-size: 12px;
+}
+
+.hud__notes li + li {
+  margin-top: 8px;
+}
+
+.hud__error-title {
+  color: var(--hud-danger);
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.hud__error-detail {
+  margin-top: 8px;
+  color: var(--hud-text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
