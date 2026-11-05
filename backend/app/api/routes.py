@@ -52,6 +52,15 @@ def create_app(
         if x_api_token != cfg.api_token:
             raise HTTPException(status_code=401, detail={"error": "unauthorized"})
 
+    def require_version(x_client_version: str | None = Header(default=None)) -> None:
+        """Authed clients must speak the server's release version.
+
+        A "dev" build skips the check entirely: that is the local
+        development mode, not an API surface worth protecting.
+        """
+        if cfg.version != "dev" and x_client_version != cfg.version:
+            raise HTTPException(status_code=409, detail={"error": "version_mismatch"})
+
     ctx = AppContext(cfg=cfg, llm=llm, clock=clock)
 
     for command in registry.COMMANDS:
@@ -63,7 +72,11 @@ def create_app(
             command.path,
             command.builder(ctx),
             methods=[command.method],
-            dependencies=[Depends(require_token)] if command.auth else [],
+            dependencies=(
+                [Depends(require_token), Depends(require_version)]
+                if command.auth
+                else []
+            ),
         )
 
     return app

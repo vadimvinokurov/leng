@@ -18,7 +18,10 @@ def env(monkeypatch, tmp_path):
 
 def test_factory_builds_health_app_from_env(monkeypatch, env):
     app = main.app()
-    assert TestClient(app).get("/v1/health").json() == {"status": "ok", "version": "dev"}
+    assert TestClient(app).get("/v1/health").json() == {
+        "status": "ok",
+        "version": "dev",
+    }
 
 
 def test_factory_applies_migrations_on_bootstrap(env):
