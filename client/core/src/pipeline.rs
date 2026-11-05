@@ -127,6 +127,9 @@ fn describe(err: ApiError) -> String {
     match err {
         ApiError::Timeout => "backend unavailable: timed out".into(),
         ApiError::Network(details) => format!("backend unavailable: {details}"),
+        ApiError::Status(409, code) if code == "version_mismatch" => {
+            "ваша версия не совпадает с версией сервера — обновите приложение (меню в трее)".into()
+        }
         ApiError::Status(status, code) => format!("server error {status}: {code}"),
     }
 }

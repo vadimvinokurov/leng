@@ -14,7 +14,14 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis", "dmg"],
     "icon": ["icons/icon.png"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "PLACEHOLDER — вписать настоящий minisign-публичный ключ после генерации (см. docs/cicd-setup.md); до этого update-проверка падает тихо, клиент работает"
+    }
   }
 }

@@ -122,3 +122,31 @@ async fn server_error_shows_message_including_status() {
         other => panic!("expected HudPayload::Error, got {other:?}"),
     }
 }
+
+/// A release server rejects wrong-version clients with one flat code; the
+/// HUD must say "update" in plain words, not a raw status line.
+#[tokio::test]
+async fn version_mismatch_shows_update_hint() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/query"))
+        .respond_with(
+            ResponseTemplate::new(409).set_body_json(json!({"error": "version_mismatch"})),
+        )
+        .mount(&server)
+        .await;
+    let api = BackendClient::new(&server.uri(), "secret", "0.1.0");
+    let hud = CaptureHud::new();
+
+    process("hello", &api, &hud, &source(), "leng-cli").await;
+
+    let shown = hud.shown.lock().unwrap().clone();
+    match &shown[..] {
+        [HudPayload::Error(message)] => {
+            assert!(message.contains("версия"), "got: {message}");
+            assert!(message.contains("обнов"), "got: {message}");
+            assert!(!message.contains("409"), "got: {message}");
+        }
+        other => panic!("expected a single error payload, got {other:?}"),
+    }
+}

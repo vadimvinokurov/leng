@@ -19,6 +19,7 @@ use std::time::Instant;
 
 use leng_core::api::BackendClient;
 use leng_core::capture::capture;
+use leng_core::config::{resolve, update_decision, CliOverrides, StdEnv, UpdateDecision};
 use leng_core::guard::GenerationGuard;
 use leng_core::pipeline::{process, Hud, HudPayload};
 use leng_core::platform::macos::{
@@ -34,6 +35,7 @@ use tauri::{
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
 use tauri_plugin_clipboard_manager::ClipboardExt as _;
+use tauri_plugin_updater::UpdaterExt;
 
 /// Label of the on-demand HUD webview window.
 const HUD_LABEL: &str = "hud";
@@ -47,10 +49,13 @@ const PAYLOAD_EVENT: &str = "leng:payload";
 
 /// Config and clipboard state shared between the trigger paths.
 struct AppState {
-    /// None when env vars are missing: the error surfaces at the first
-    /// trigger, not as a startup panic.
+    /// None when no config source (flags/config.json/env) resolves: the
+    /// error surfaces at the first trigger, not as a startup panic.
     api: Option<Arc<BackendClient>>,
     client_name: String,
+    /// The resolved backend base URL, for the updater endpoint (`None`
+    /// when the config did not resolve).
+    base_url: Option<String>,
     /// Last clipboard text captured, for the fresh-copy filter.
     previous_clipboard: Mutex<Option<String>>,
     /// Last payload shown, replayed when a freshly opened HUD page signals
@@ -64,19 +69,28 @@ struct AppState {
 }
 
 fn main() {
+    let resolved = resolve_backend_config();
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             open_accessibility_settings,
             check_permission,
             render_hud
         ])
         .manage(AppState {
-            api: resolve_api(),
+            api: resolved.as_ref().map(|cfg| {
+                Arc::new(BackendClient::new(
+                    &cfg.base_url,
+                    &cfg.token,
+                    env!("CARGO_PKG_VERSION"),
+                ))
+            }),
+            base_url: resolved.as_ref().map(|cfg| cfg.base_url.clone()),
             client_name: resolve_client_name(),
             previous_clipboard: Mutex::new(None),
             last_payload: Mutex::new(None),
@@ -90,6 +104,7 @@ fn main() {
                 eprintln!("leng: autostart registration failed: {err}");
             }
             ensure_trigger(app.handle());
+            spawn_update_check(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -127,6 +142,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "trigger-now" => trigger_now(app, true),
+            "update-now" => update_now(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -135,18 +151,24 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Env-driven backend config. Missing `LENG_BACKEND_URL` / `LENG_API_TOKEN`
-/// is a first-trigger error, not a startup panic.
-fn resolve_api() -> Option<Arc<BackendClient>> {
-    let url = non_empty_env("LENG_BACKEND_URL");
-    let token = non_empty_env("LENG_API_TOKEN");
-    match (url, token) {
-        (Some(url), Some(token)) => Some(Arc::new(BackendClient::new(
-            &url,
-            &token,
-            env!("CARGO_PKG_VERSION"),
-        ))),
-        _ => None,
+/// Config resolution for the GUI: flags > config.json next to the
+/// executable > LENG_* env (the same chain as the CLI, `leng_core::config`).
+/// Unresolved config is a first-trigger error, not a startup panic.
+fn resolve_backend_config() -> Option<leng_core::config::ResolvedConfig> {
+    let config_path = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::PathBuf::from))
+        .map(|dir| dir.join("config.json"));
+    let overrides = CliOverrides {
+        base_url: None,
+        token: None,
+    };
+    match resolve(overrides, config_path.as_deref(), &StdEnv) {
+        Ok(resolved) => Some(resolved),
+        Err(err) => {
+            eprintln!("leng: config unresolved: {err}");
+            None
+        }
     }
 }
 
@@ -169,11 +191,119 @@ fn resolve_client_name() -> String {
 }
 
 fn missing_config_message() -> String {
-    let missing: Vec<&str> = ["LENG_BACKEND_URL", "LENG_API_TOKEN"]
-        .into_iter()
-        .filter(|name| non_empty_env(name).is_none())
-        .collect();
-    format!("missing environment variable: {}", missing.join(", "))
+    "нет конфига: положи config.json (backend_url и api_token) рядом с \
+     исполнимым или задай LENG_BACKEND_URL и LENG_API_TOKEN"
+        .to_string()
+}
+
+/// Fire-and-forget update check at startup: asks the server's public
+/// health endpoint for its version and, when it differs from ours, adds
+/// «Обновить приложение до vX.Y.Z» to the tray. Any error leaves the
+/// client quietly working (no update offer); nothing blocks startup.
+fn spawn_update_check(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let some_api = {
+            let state = app.state::<AppState>();
+            state.api.clone()
+        };
+        let Some(api) = some_api else {
+            return;
+        };
+        let health = match api.health().await {
+            Ok(health) => health,
+            Err(_) => return,
+        };
+        if let UpdateDecision::Offer { version } =
+            update_decision(env!("CARGO_PKG_VERSION"), &health.version)
+        {
+            if let Err(err) = offer_update_in_tray(&app, &version) {
+                eprintln!("leng: failed to offer update in tray: {err}");
+            }
+        }
+    });
+}
+
+/// Rebuild the tray menu with the update item in front. The menu event
+/// handler (registered with the tray at startup) already routes ids.
+fn offer_update_in_tray(app: &AppHandle, version: &str) -> tauri::Result<()> {
+    let update_item = MenuItem::with_id(
+        app,
+        "update-now",
+        format!("Обновить приложение до v{version}"),
+        true,
+        None::<&str>,
+    )?;
+    rebuild_tray_menu(app, &update_item)
+}
+
+fn rebuild_tray_menu(app: &AppHandle, update_item: &MenuItem<tauri::Wry>) -> tauri::Result<()> {
+    let trigger_item = MenuItem::with_id(app, "trigger-now", "Триггер сейчас", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = MenuBuilder::new(app)
+        .item(&trigger_item)
+        .separator()
+        .item(update_item)
+        .separator()
+        .item(&quit_item)
+        .build()?;
+    let Some(tray) = app.tray_by_id("leng-tray") else {
+        eprintln!("leng: tray not found for the update offer");
+        return Ok(());
+    };
+    tray.set_menu(Some(menu))
+}
+
+/// The update click: check again through the updater plugin (endpoint is
+/// this server's mirror), download and install, restart. Failures surface
+/// as a HUD error payload; the running version keeps working.
+fn update_now(app: &AppHandle) {
+    let base_url = {
+        let state = app.state::<AppState>();
+        state.base_url.clone()
+    };
+    let Some(base_url) = base_url else {
+        show_payload(app, HudPayload::Error(missing_config_message()));
+        return;
+    };
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = run_update(&handle, &base_url).await {
+            show_payload_now(&handle, HudPayload::Error(format!("update failed: {err}")));
+        }
+        // On success `run_update` has restarted the process.
+    });
+}
+
+async fn run_update(app: &AppHandle, base_url: &str) -> Result<(), String> {
+    let endpoint = tauri::Url::parse(&format!(
+        "{}/v1/clients/latest.json",
+        base_url.trim_end_matches('/')
+    ))
+    .map_err(|err| err.to_string())?;
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|err| err.to_string())?
+        .build()
+        .map_err(|err| err.to_string())?;
+    let Some(update) = updater.check().await.map_err(|err| err.to_string())? else {
+        return Err("no update available".into());
+    };
+    update
+        .download_and_install(|_chunk, _total| {}, || {})
+        .await
+        .map_err(|err| err.to_string())?;
+    app.restart()
+}
+
+/// Immediate (synchronous) error payload from an async context: a fresh
+/// generation supersedes older ones, same as `show_payload`.
+fn show_payload_now(app: &AppHandle, payload: HudPayload) {
+    let handle = app.clone();
+    let inner = handle.clone();
+    let _ = handle.run_on_main_thread(move || {
+        show_payload(&inner, payload);
+    });
 }
 
 /// Install the monitors when Accessibility is already granted, otherwise
