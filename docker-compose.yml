@@ -2,6 +2,8 @@
 # Backend (always) and fake-llm test server (--profile test).
 # LENG_PORT / LENG_DATA_DIR come from the .env file and are only used
 # for compose interpolation below, not inside the containers.
+# LENG_VERSION comes from the deploy script's shell (release tag or
+# "dev") and is passed through into the backend container.
 services:
   backend:
     build: .
@@ -9,6 +11,9 @@ services:
     environment:
       # The DB always lives on the mounted volume inside the container.
       LENG_DB_PATH: /data/leng.db
+      # Server version (release tag without the "v", or "dev"); set by
+      # deploy.sh / deploy.bat through the shell, default dev.
+      LENG_VERSION: ${LENG_VERSION:-dev}
     ports:
       - "${LENG_PORT:-28080}:8000"
     volumes:
