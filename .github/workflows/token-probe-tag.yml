@@ -1,0 +1,30 @@
+# Same create-release call as token-probe, but triggered the way the
+# release workflow is — by a tag push. The outcome tells whether the
+# failure lives in the trigger context or in tauri-action itself.
+name: token-probe-tag
+on:
+  push:
+    tags: ['probe*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tag context
+        run: echo "ref=$GITHUB_REF_NAME event=$GITHUB_EVENT_NAME"
+      - name: Create a probe release with GITHUB_TOKEN
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAGNAME: ${{ (github.event_name == 'push' && 'probe-tag') || 'probe-dispatch' }}
+        run: |
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' \
+            -X POST -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" \
+            -d "{\"tag_name\":\"$TAGNAME\",\"name\":\"tag probe (delete me)\"}")
+          echo "HTTP $code"
+          cat /tmp/resp.json
