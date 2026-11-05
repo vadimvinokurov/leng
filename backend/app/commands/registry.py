@@ -64,11 +64,11 @@ class Command:
     builder: Callable[[AppContext], Endpoint]
 
 
-def build_health(ctx: AppContext) -> Endpoint:  # noqa: ARG001
-    # Uniform builder signature: the registry dispatch always passes ctx,
-    # health has nothing to capture.
+def build_health(ctx: AppContext) -> Endpoint:
+    cfg = ctx.cfg
+
     def health() -> dict[str, Any]:
-        return {"status": "ok"}
+        return {"status": "ok", "version": cfg.version}
 
     return health
 

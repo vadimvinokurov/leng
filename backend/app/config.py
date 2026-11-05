@@ -12,13 +12,16 @@ class Config:
     llm_model: str
     llm_api_key: str
     llm_timeout_s: float
+    version: str = "dev"
+    github_repo: str = "vadimvinokurov/leng"
 
     @classmethod
     def from_env(cls) -> "Config":
         """Build Config from LENG_* environment variables.
 
-        LENG_LLM_MODEL and LENG_LLM_TIMEOUT_S have defaults; the rest
-        are required and raise KeyError when missing.
+        LENG_LLM_MODEL, LENG_LLM_TIMEOUT_S, LENG_VERSION and
+        LENG_GITHUB_REPO have defaults; the rest are required and raise
+        KeyError when missing.
         """
         return cls(
             api_token=os.environ["LENG_API_TOKEN"],
@@ -27,4 +30,6 @@ class Config:
             llm_model=os.environ.get("LENG_LLM_MODEL", "glm5.3-flash:claude"),
             llm_api_key=os.environ["LENG_LLM_API_KEY"],
             llm_timeout_s=float(os.environ.get("LENG_LLM_TIMEOUT_S", "10.0")),
+            version=os.environ.get("LENG_VERSION", "dev"),
+            github_repo=os.environ.get("LENG_GITHUB_REPO", "vadimvinokurov/leng"),
         )

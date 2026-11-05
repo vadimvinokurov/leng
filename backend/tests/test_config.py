@@ -46,3 +46,18 @@ def test_from_env_missing_required_var(monkeypatch):
     monkeypatch.delenv("LENG_API_TOKEN")
     with pytest.raises(KeyError):
         Config.from_env()
+
+
+def test_from_env_version_and_github_repo(monkeypatch):
+    for key, value in REQUIRED_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("LENG_VERSION", raising=False)
+    monkeypatch.delenv("LENG_GITHUB_REPO", raising=False)
+    cfg = Config.from_env()
+    assert cfg.version == "dev"
+    assert cfg.github_repo == "vadimvinokurov/leng"
+    monkeypatch.setenv("LENG_VERSION", "1.2.0")
+    monkeypatch.setenv("LENG_GITHUB_REPO", "someone/else")
+    cfg = Config.from_env()
+    assert cfg.version == "1.2.0"
+    assert cfg.github_repo == "someone/else"

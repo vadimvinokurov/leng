@@ -70,7 +70,20 @@ def test_health_without_token_returns_ok(api_env):
     resp = client.get("/v1/health")
 
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    assert resp.json() == {"status": "ok", "version": "dev"}
+
+
+def test_health_reports_configured_version(api_env):
+    cfg, _ = api_env
+    cfg = Config(
+        **{**cfg.__dict__, "version": "0.2.0"}
+    )
+    client, _ = make_client(cfg, {})
+
+    resp = client.get("/v1/health")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "version": "0.2.0"}
 
 
 def test_query_without_token_returns_401(api_env):

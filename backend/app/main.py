@@ -3,6 +3,9 @@
 `uvicorn app.main:app --factory` calls the `app` factory below, which
 is the only place wiring the real configuration and LLM client together
 (Config from LENG_* environment, OpenAI-compatible HTTP client).
+Optional env: LENG_LLM_MODEL, LENG_LLM_TIMEOUT_S, LENG_VERSION (release
+tag or "dev"), LENG_GITHUB_REPO (mirror upstream, default
+vadimvinokurov/leng).
 """
 
 from fastapi import FastAPI
