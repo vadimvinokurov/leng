@@ -8,6 +8,7 @@ inside the image.
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
@@ -64,8 +65,14 @@ def sync_mirror(cfg: Config, transport: Transport) -> None:
     """Mirror the release tagged v<cfg.version> into clients_dir.
 
     Existing files are never re-downloaded (the fetch happens only for
-    files that are missing). Any failure raises MirrorError; the caller
-    (startup task or /v1/clients/refresh) decides how to report it.
+    files that are missing). The manifest is downloaded and parsed
+    BEFORE anything is written, and every file lands through an atomic
+    temp-file + replace, so a crash or a failed download can never leave
+    a truncated or corrupt file in the cache — sync skips existing
+    files, which would keep serving it. The manifest is written last:
+    only a fully mirrored release is advertised to clients. Any failure
+    raises MirrorError; the caller (startup task or /v1/clients/refresh)
+    decides how to report it.
     """
     target = clients_dir(cfg)
     target.mkdir(parents=True, exist_ok=True)
@@ -73,15 +80,22 @@ def sync_mirror(cfg: Config, transport: Transport) -> None:
     manifest_path = target / MANIFEST_NAME
     if manifest_path.exists():
         manifest = manifest_path.read_bytes()
+        # Same validation as a freshly downloaded manifest would get.
+        _platform_urls(manifest)
     else:
-        manifest = _write(manifest_path, _fetch(transport, latest_json_url(cfg)))
+        manifest = _fetch(transport, latest_json_url(cfg))
+        _platform_urls(manifest)
 
     for url in _platform_urls(manifest):
         name = urlparse(url).path.rsplit("/", 1)[-1]
         dest = target / name
         if dest.exists():
             continue
-        _write(dest, _fetch(transport, url))
+        content = _fetch(transport, url)
+        _write(dest, content)
+
+    if not manifest_path.exists():
+        _write(manifest_path, manifest)
 
 
 def _fetch(transport: Transport, url: str) -> bytes:
@@ -107,5 +121,13 @@ def _platform_urls(manifest: bytes) -> list[str]:
 
 
 def _write(path: Path, content: bytes) -> bytes:
-    path.write_bytes(content)
+    """Persist content atomically: temp file in the same dir, then
+    replace, so readers never see a half-written file."""
+    temp = path.with_name(f".{path.name}.tmp")
+    try:
+        temp.write_bytes(content)
+        os.replace(temp, path)
+    finally:
+        if temp.exists():
+            temp.unlink(missing_ok=True)
     return content

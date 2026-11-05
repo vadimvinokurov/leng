@@ -180,3 +180,44 @@ def test_dev_version_skips_sync(tmp_path):
 
     with TestClient(create_app(dev_cfg, FakeLLM({}), mirror_transport=spy)):
         assert spy.calls == 0  # type: ignore[attr-defined]
+
+
+def test_failed_download_leaves_no_partial_file(release_cfg):
+    """A download that dies mid-way must not leave a truncated artifact in
+    the cache: sync skips existing files, so a partial file would be
+    served forever (final review: Important 1)."""
+    base = f"https://github.com/{release_cfg.github_repo}"
+    transport = FakeTransport(
+        {
+            f"{base}/releases/download/v1.2.0/latest.json": manifest_bytes(
+                release_cfg
+            ),
+            f"{base}/releases/download/v1.2.0/Leng.app.tar.gz": b"mac-blob",
+            # The Windows artifact never arrives (connection dies).
+        }
+    )
+
+    with pytest.raises(mirror.MirrorError):
+        mirror.sync_mirror(release_cfg, transport)
+
+    clients = mirror.clients_dir(release_cfg)
+    assert (clients / "Leng.app.tar.gz").read_bytes() == b"mac-blob"
+    assert not (clients / "Leng_1.2.0_x64-setup.exe").exists(), (
+        "a failed download must not leave a partial file"
+    )
+
+
+def test_invalid_manifest_cache_is_not_written(release_cfg):
+    """A manifest that does not parse must reach neither the cache nor
+    the disk (final review: Important 1): the page and the manifest
+    endpoint keep working instead of serving a corrupt cache."""
+    base = f"https://github.com/{release_cfg.github_repo}"
+    transport = FakeTransport(
+        {f"{base}/releases/download/v1.2.0/latest.json": b"not json at all"}
+    )
+
+    with pytest.raises(mirror.MirrorError):
+        mirror.sync_mirror(release_cfg, transport)
+
+    clients = mirror.clients_dir(release_cfg)
+    assert not (clients / "latest.json").exists()

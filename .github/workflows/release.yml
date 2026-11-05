@@ -19,16 +19,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Tag must equal version in tauri.conf.json
+      - name: Tag must equal version in tauri.conf.json and both crates
         run: |
           conf=$(python3 -c "import json; print(json.load(open('client/src-tauri/tauri.conf.json'))['version'])")
+          tauri_crate=$(grep -m1 '^version = ' client/src-tauri/Cargo.toml | sed 's/version *= *"\(.*\)"/\1/')
+          core_crate=$(grep -m1 '^version = ' client/core/Cargo.toml | sed 's/version *= *"\(.*\)"/\1/')
           # The version protocol uses bare semver everywhere; compare
-          # without the leading "v".
+          # without the leading "v". All three sources must line up — the
+          # GUI version header ships from the crate, the updater manifest
+          # from tauri.conf.json, the server gates on the exact tag.
           tag="${GITHUB_REF_NAME#v}"
-          if [ "$tag" != "$conf" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} does not match version ${conf} in tauri.conf.json"
-            exit 1
-          fi
+          failed=0
+          for pair in "tauri.conf.json|$conf" "src-tauri crate|$tauri_crate" "core crate|$core_crate"; do
+            name="${pair%%|*}"; value="${pair##*|}"
+            if [ "$tag" != "$value" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match ${name} version ${value}"
+              failed=1
+            fi
+          done
+          exit $failed
 
   build:
     needs: guard

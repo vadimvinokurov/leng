@@ -54,8 +54,10 @@ GitHub Releases, пока зеркальный кэш пуст.
 
 ## 4. Релиз (каждый раз)
 
-1. Bump версии в **двух** файлах — `client/src-tauri/tauri.conf.json`
-   (`version`) и `client/core/Cargo.toml` (`version`, от него зависит
+1. Bump версии в **трёх** файлах (гард релиза не пустит расхождение):
+   `client/src-tauri/tauri.conf.json` (`version` — источник updater-манифеста),
+   `client/src-tauri/Cargo.toml` (`version` — от него `X-Client-Version`
+   у GUI-клиента) и `client/core/Cargo.toml` (`version` — от него
    `leng-cli`). Коммит в `main`.
 2. `git tag v1.2.3 && git push origin main --tags` (тег == версия после
    среза `v`, иначе гард релиза не пустит).
