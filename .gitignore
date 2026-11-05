@@ -5,3 +5,5 @@ target/
 client/src-tauri/gen/
 .claude/
 docs/superpowers/
+config.json
+.leng-signing/

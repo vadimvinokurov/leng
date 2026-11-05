@@ -1,0 +1,4 @@
+{
+  "backend_url": "http://YOUR-SERVER-HOST:28080",
+  "api_token": "the LENG_API_TOKEN value from the server's .env"
+}
