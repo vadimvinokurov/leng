@@ -10,9 +10,12 @@ import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import mirror
 from app.commands import registry
@@ -49,18 +52,21 @@ def create_app(
     apply_migrations(bootstrap)
     bootstrap.close()
 
+    ctx = AppContext(cfg=cfg, llm=llm, clock=clock, mirror_transport=mirror_transport)
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if cfg.version != "dev":
 
             def run_sync() -> None:
-                transport = mirror_transport or mirror.HttpxTransport()
                 try:
-                    mirror.sync_mirror(cfg, transport)
+                    mirror.sync_mirror(
+                        cfg, ctx.mirror_transport or mirror.HttpxTransport()
+                    )
                 except (mirror.MirrorError, mirror.TransportError) as exc:
                     logger.warning("release mirror sync failed: %s", exc)
 
-            if mirror_transport is not None:
+            if ctx.mirror_transport is not None:
                 run_sync()
             else:
                 threading.Thread(target=run_sync, daemon=True).start()
@@ -68,9 +74,14 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan)
 
-    @app.exception_handler(HTTPException)
-    def http_error(_: Request, exc: HTTPException) -> JSONResponse:
-        """Render every HTTP error with the flat {"error": <code>} body."""
+    @app.exception_handler(StarletteHTTPException)
+    def http_error(_: Request, exc: StarletteHTTPException) -> JSONResponse:
+        """Render every HTTP error with the flat {"error": <code>} body.
+
+        Starlette's router raises its own HTTPException (404 for unknown
+        paths) which fastapi.HTTPException handlers do not cover, so the
+        base class is handled here instead.
+        """
         content = exc.detail if isinstance(exc.detail, dict) else {"error": exc.detail}
         return JSONResponse(status_code=exc.status_code, content=content)
 
@@ -92,17 +103,49 @@ def create_app(
         if cfg.version != "dev" and x_client_version != cfg.version:
             raise HTTPException(status_code=409, detail={"error": "version_mismatch"})
 
-    ctx = AppContext(cfg=cfg, llm=llm, clock=clock)
+    def _endpoint_for(command: registry.Command) -> Callable[..., Any]:
+        """Turn the builder's endpoint into a FastAPI-callable.
+
+        JSON commands pass through; the updater manifest gets its
+        platform URLs rewritten to this server so client updates never
+        leave the mirror. html/file renders keep their original
+        signatures and are rendered by `response_class` below.
+        """
+        raw = command.builder(ctx)
+        if command.id != "client_manifest":
+            return raw
+
+        def manifest(request: Request) -> dict[str, Any]:
+            parsed: dict[str, Any] = raw()
+            base = str(request.base_url).rstrip("/")
+            for entry in parsed.get("platforms", {}).values():
+                if isinstance(entry, dict) and "url" in entry:
+                    name = urlparse(entry["url"]).path.rsplit("/", 1)[-1]
+                    entry["url"] = f"{base}/v1/clients/files/{name}"
+            return parsed
+
+        return manifest
+
+    # Rendering for non-JSON commands happens through response_class:
+    # the builder's return value (html str / file path) is passed to the
+    # response class unchanged, and FastAPI still sees the real
+    # signature for parameter injection.
+    RESPONSE_CLASSES = {
+        "html": HTMLResponse,
+        "file": FileResponse,
+    }
 
     for command in registry.COMMANDS:
         if command.method == "POST" and command.params is None:
             raise ValueError(
                 f"command {command.id!r}: POST requires a params model"
             )
+        response_class = RESPONSE_CLASSES.get(command.renders, JSONResponse)
         app.add_api_route(
             command.path,
-            command.builder(ctx),
+            _endpoint_for(command),
             methods=[command.method],
+            response_class=response_class,
             dependencies=(
                 [Depends(require_token), Depends(require_version)]
                 if command.auth

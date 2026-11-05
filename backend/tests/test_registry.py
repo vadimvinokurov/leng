@@ -26,6 +26,10 @@ def make_cfg(tmp_path: Path) -> Config:
 def test_registry_pins_command_ids():
     assert [c.id for c in COMMANDS] == [
         "health",
+        "downloads_page",
+        "client_manifest",
+        "client_file",
+        "client_refresh",
         "query",
         "word_history",
         "commands",
@@ -34,7 +38,19 @@ def test_registry_pins_command_ids():
 
 
 def test_registry_entries_carry_method_path_and_auth():
-    health, query, word_history, commands, state = COMMANDS
+    by_id = {c.id: c for c in COMMANDS}
+    health, query, word_history = (
+        by_id["health"],
+        by_id["query"],
+        by_id["word_history"],
+    )
+    commands, state = by_id["commands"], by_id["state"]
+    downloads = by_id["downloads_page"]
+    manifest, client_file, client_refresh = (
+        by_id["client_manifest"],
+        by_id["client_file"],
+        by_id["client_refresh"],
+    )
 
     assert (health.method, health.path, health.auth) == (
         "GET",
@@ -58,10 +74,38 @@ def test_registry_entries_carry_method_path_and_auth():
     )
     assert (state.method, state.path, state.auth) == ("GET", "/v1/state", True)
     assert state.params is None
+    assert (downloads.method, downloads.path, downloads.auth) == (
+        "GET",
+        "/",
+        False,
+    )
+    assert (manifest.method, manifest.path, manifest.auth) == (
+        "GET",
+        "/v1/clients/latest.json",
+        False,
+    )
+    assert (client_file.method, client_file.path, client_file.auth) == (
+        "GET",
+        "/v1/clients/files/{name:path}",
+        False,
+    )
+    assert (client_refresh.method, client_refresh.path, client_refresh.auth) == (
+        "POST",
+        "/v1/clients/refresh",
+        True,
+    )
+
+
+def test_registry_render_kinds():
+    by_id = {c.id: c for c in COMMANDS}
+
+    assert by_id["downloads_page"].renders == "html"
+    assert by_id["client_file"].renders == "file"
+    assert by_id["health"].renders == "json"
 
 
 def test_registry_query_declares_params_schema():
-    query = COMMANDS[1]
+    query = next(c for c in COMMANDS if c.id == "query")
 
     assert query.params is not None
     assert "raw_text" in query.params.model_json_schema()["properties"]

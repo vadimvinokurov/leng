@@ -33,6 +33,10 @@ def test_commands_endpoint_is_public_and_lists_all_commands(client):
     assert set(body) == {"commands"}
     assert [c["id"] for c in body["commands"]] == [
         "health",
+        "downloads_page",
+        "client_manifest",
+        "client_file",
+        "client_refresh",
         "query",
         "word_history",
         "commands",

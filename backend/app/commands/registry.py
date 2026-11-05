@@ -18,10 +18,12 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
+from app import mirror
 from app.config import Config
 from app.db import connect
 from app.llm.base import LLMClient, LLMError
@@ -33,9 +35,10 @@ MAX_TEXT_LEN = 50_000
 
 logger = logging.getLogger(__name__)
 
-# Every handler serves a JSON-serializable dict; the concrete key/value
-# types vary per command (see each builder), hence the Any values.
-Endpoint = Callable[..., dict[str, Any]]
+# Every handler serves either a JSON-serializable dict or a Response
+# object (the downloads surface streams files and HTML); the concrete
+# types vary per command (see each builder), hence Any.
+Endpoint = Callable[..., Any]
 
 
 class CommandError(Exception):
@@ -52,6 +55,9 @@ class AppContext:
     cfg: Config
     llm: LLMClient
     clock: Callable[[], datetime]
+    # GitHub transport for the release mirror (injectable in tests; the
+    # production default is mirror.HttpxTransport built on demand).
+    mirror_transport: "mirror.Transport | None" = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +68,9 @@ class Command:
     params: type[BaseModel] | None
     auth: bool
     builder: Callable[[AppContext], Endpoint]
+    # How the API layer renders the builder's neutral return value:
+    # "json" (dict), "html" (str body) or "file" (a path to stream).
+    renders: str = "json"
 
 
 def build_health(ctx: AppContext) -> Endpoint:
@@ -217,6 +226,114 @@ def build_state(ctx: AppContext) -> Endpoint:
     return state
 
 
+class RefreshIn(BaseModel):
+    """POST /v1/clients/refresh takes no parameters (empty body)."""
+
+
+def _cached_files(cfg: Config) -> list[str]:
+    """Names of mirror-cache files the page may link to."""
+    clients = mirror.clients_dir(cfg)
+    if not clients.is_dir():
+        return []
+    return sorted(
+        entry.name
+        for entry in clients.iterdir()
+        if entry.is_file()
+        and entry.name != mirror.MANIFEST_NAME
+        and not entry.name.endswith(".sig")
+    )
+
+
+def _safe_cached_path(cfg: Config, name: str) -> Path | None:
+    """Resolve a requested filename inside the cache, rejecting traversal.
+
+    A name that is not a plain file name (contains separators, dots
+    tricks) or that does not exist in the cache yields None.
+    """
+    if not name or "/" in name or "\\" in name:
+        return None
+    if Path(name).name != name or name in (".", ".."):
+        return None
+    path = mirror.clients_dir(cfg) / name
+    if not path.is_file():
+        return None
+    return path
+
+
+def _mirror_empty() -> CommandError:
+    return CommandError(status_code=404, detail={"error": "mirror_empty"})
+
+
+def build_downloads_page(ctx: AppContext) -> Endpoint:
+    cfg = ctx.cfg
+
+    def page() -> str:
+        """Build the downloads page body; rendered as HTML by the API layer."""
+        files = _cached_files(cfg)
+        if files:
+            rows = "".join(
+                f'<li><a href="/v1/clients/files/{name}">{name}</a></li>'
+                for name in files
+            )
+            return (
+                f"<html><body><h1>Leng {cfg.version}</h1>"
+                f"<ul>{rows}</ul></body></html>"
+            )
+        return (
+            f"<html><body><h1>Leng {cfg.version}</h1>"
+            f'<p>Downloads: <a href="https://github.com/{cfg.github_repo}'
+            f'/releases">GitHub Releases</a></p></body></html>'
+        )
+
+    return page
+
+
+def build_client_manifest(ctx: AppContext) -> Endpoint:
+    cfg = ctx.cfg
+
+    def manifest() -> dict[str, Any]:
+        """Serve the cached updater manifest raw; the API layer rewrites
+        each platform URL to point at this server."""
+        path = mirror.clients_dir(cfg) / mirror.MANIFEST_NAME
+        if not path.is_file():
+            raise _mirror_empty()
+        parsed: dict[str, Any] = json.loads(path.read_bytes())
+        return parsed
+
+    return manifest
+
+
+def build_client_file(ctx: AppContext) -> Endpoint:
+    cfg = ctx.cfg
+
+    def client_file(name: str) -> Path:
+        """Return the cached file to stream; the API layer makes a
+        FileResponse out of the path."""
+        path = _safe_cached_path(cfg, name)
+        if path is None:
+            raise _mirror_empty()
+        return path
+
+    return client_file
+
+
+def build_client_refresh(ctx: AppContext) -> Endpoint:
+    cfg = ctx.cfg
+    injected_transport = ctx.mirror_transport
+
+    def refresh(_: RefreshIn) -> dict[str, Any]:
+        try:
+            mirror.sync_mirror(cfg, injected_transport or mirror.HttpxTransport())
+        except (mirror.MirrorError, mirror.TransportError) as exc:
+            logger.warning("mirror refresh failed: %s", exc)
+            raise CommandError(
+                status_code=502, detail={"error": "mirror_unavailable"}
+            ) from exc
+        return {"status": "ok"}
+
+    return refresh
+
+
 COMMANDS: tuple[Command, ...] = (
     Command(
         id="health",
@@ -225,6 +342,40 @@ COMMANDS: tuple[Command, ...] = (
         params=None,
         auth=False,
         builder=build_health,
+    ),
+    Command(
+        id="downloads_page",
+        method="GET",
+        path="/",
+        params=None,
+        auth=False,
+        builder=build_downloads_page,
+        renders="html",
+    ),
+    Command(
+        id="client_manifest",
+        method="GET",
+        path="/v1/clients/latest.json",
+        params=None,
+        auth=False,
+        builder=build_client_manifest,
+    ),
+    Command(
+        id="client_file",
+        method="GET",
+        path="/v1/clients/files/{name:path}",
+        params=None,
+        auth=False,
+        builder=build_client_file,
+        renders="file",
+    ),
+    Command(
+        id="client_refresh",
+        method="POST",
+        path="/v1/clients/refresh",
+        params=RefreshIn,
+        auth=True,
+        builder=build_client_refresh,
     ),
     Command(
         id="query",
