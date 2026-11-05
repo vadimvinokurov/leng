@@ -21,7 +21,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "PLACEHOLDER — вписать настоящий minisign-публичный ключ после генерации (см. docs/cicd-setup.md); до этого update-проверка падает тихо, клиент работает"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM5QURFMjk3NTcwN0JGRDIKUldUU3Z3ZFhsK0t0T1Zra01qRWluSnZkaWdtcFhNNGwxbm16bkxHSTJET0lBM1JKUFJuSGoveTQK"
     }
   }
 }
