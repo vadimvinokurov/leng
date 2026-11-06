@@ -48,7 +48,6 @@ extern "C" {
     // NULL options is the documented promptless check (equivalent to
     // kAXTrustedCheckOptionPrompt = false).
     fn AXIsProcessTrustedWithOptions(options: *const c_void) -> c_uchar;
-
     // Declared in <HIServices/Accessibility.h> and
     // <HIServices/AXAttributeConstants.h> (both shipped inside the
     // ApplicationServices umbrella). CFStringRef/AXUIElementRef arrive as
@@ -80,10 +79,38 @@ extern "C" {
         buffer_size: isize,
         encoding: u32,
     ) -> c_uchar;
+    fn CFDictionaryCreate(
+        allocator: *const c_void,
+        keys: *const *const c_void,
+        values: *const *const c_void,
+        count: isize,
+        key_callbacks: *const c_void,
+        value_callbacks: *const c_void,
+    ) -> *const c_void;
+    // kCFBooleanTrue, kCFCopyStringDictionaryKeyCallBacks and
+    // kCFTypeDictionaryValueCallBacks are exported variables holding the
+    // singleton references/structs (CoreFoundation/CFNumber.h,
+    // CFDictionary.h).
+    static kCFBooleanTrue: *const c_void;
 }
 
 /// kCFStringEncodingUTF8 (CoreFoundation/CFString.h).
 const K_UTF8_ENCODING: u32 = 0x0800_0100;
+
+/// The callback structs of `CFDictionaryCreate`: one CFIndex version plus
+/// five function pointers, opaque on our side (CoreFoundation/CFDictionary.h).
+#[repr(C)]
+struct CFCallbackStruct {
+    version: isize,
+    slots: [usize; 5],
+}
+
+// Exported singleton structs; their storage lives in CoreFoundation, the
+// layout above is only passed by reference.
+extern "C" {
+    static kCFCopyStringDictionaryKeyCallBacks: CFCallbackStruct;
+    static kCFTypeDictionaryValueCallBacks: CFCallbackStruct;
+}
 
 /// kAXErrorSuccess (HIServices/AXError.h).
 const K_AX_ERROR_SUCCESS: i32 = 0;
@@ -118,6 +145,56 @@ pub fn permission_granted() -> bool {
     // SAFETY: no options dictionary is passed (promptless), no data retained
     // by the callee.
     unsafe { AXIsProcessTrustedWithOptions(std::ptr::null()) != 0 }
+}
+
+/// Request the Accessibility permission with the system's own prompt.
+///
+/// When the permission is missing, macOS raises its «Leng wants to control
+/// your computer» alert and adds the app to the Accessibility list on
+/// consent — the app entry then exists no matter where the "+"-button of
+/// the current System Settings hides. Returns whether the permission is
+/// granted at call time (the state after consent is read by the regular
+/// re-checks). Called from the onboarding paths only; the hot-path
+/// trigger check stays promptless ([`permission_granted`]).
+///
+/// Not unit-testable (TCC is a system service, PROJECT.md §11.3); verified
+/// against the manual checklist.
+pub fn request_accessibility_permission() -> bool {
+    // SAFETY: a single-entry dictionary over borrowed CFString/CFBoolean
+    // singletons, released after the call; nothing outlives it.
+    unsafe {
+        let key = CFStringCreateWithCString(
+            std::ptr::null(),
+            c"AXTrustedCheckOptionPrompt".as_ptr(),
+            K_UTF8_ENCODING,
+        );
+        if key.is_null() {
+            eprintln!(
+                "leng: cannot build the prompt options; falling back to the promptless check"
+            );
+            return permission_granted();
+        }
+        let keys = [key];
+        let values = [kCFBooleanTrue];
+        let options = CFDictionaryCreate(
+            std::ptr::null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            &kCFCopyStringDictionaryKeyCallBacks as *const CFCallbackStruct as *const c_void,
+            &kCFTypeDictionaryValueCallBacks as *const CFCallbackStruct as *const c_void,
+        );
+        let trusted = if options.is_null() {
+            permission_granted()
+        } else {
+            AXIsProcessTrustedWithOptions(options) != 0
+        };
+        if !options.is_null() {
+            CFRelease(options);
+        }
+        CFRelease(key);
+        trusted
+    }
 }
 
 /// Localized name of the frontmost application, or a stable placeholder when

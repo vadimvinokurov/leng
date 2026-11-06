@@ -25,7 +25,8 @@ use leng_core::config::{
 use leng_core::guard::GenerationGuard;
 use leng_core::pipeline::{process, Hud, HudPayload};
 use leng_core::platform::macos::{
-    install_dismiss_monitor, install_event_monitor, permission_granted, source_info, DismissEvent,
+    install_dismiss_monitor, install_event_monitor, permission_granted,
+    request_accessibility_permission, source_info, DismissEvent,
 };
 use leng_core::platform::source::SourceInfo;
 use leng_core::trigger::DoubleTap;
@@ -336,6 +337,10 @@ fn ensure_trigger(app: &AppHandle) {
         install_trigger(app);
     } else {
         eprintln!("leng: Accessibility permission not granted; trigger not installed");
+        // The system prompt: macOS raises its own alert and adds the app
+        // to the Accessibility list on consent, no manual "+"-hunting in
+        // System Settings.
+        let _ = request_accessibility_permission();
         open_permission_window(app);
     }
 }
@@ -707,6 +712,9 @@ fn open_accessibility_settings() {
 #[tauri::command]
 fn check_permission(app: AppHandle) -> bool {
     if !permission_granted() {
+        // Still not granted after «Проверить снова»: raise the system
+        // prompt again so the consent dialog stays reachable.
+        let _ = request_accessibility_permission();
         return false;
     }
     if let Some(window) = app.get_webview_window(PERMISSION_LABEL) {
