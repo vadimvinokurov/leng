@@ -13,14 +13,20 @@ if [ ! -f "$root/.env" ]; then
   exit 1
 fi
 
-# The server version: the exact tag this checkout stands on, without the
-# leading "v"; without a tag this is a dev build ("dev") and the API
-# skips the client-version gate.
+# The server version: the exact tag this checkout stands on when there is
+# one; otherwise the latest reachable release tag. Backend-only deploys
+# from main (no new tag) must behave exactly like a tagged checkout: the
+# gate and the release mirror key off the last client release, and a
+# "dev" version here would silently disable them. Without any tag at all
+# this is a dev build ("dev") and the API skips the client-version gate.
 tag="$(git -C "$root" describe --tags --exact-match 2>/dev/null || true)"
+if [ -z "$tag" ]; then
+  tag="$(git -C "$root" describe --tags --abbrev=0 2>/dev/null || true)"
+fi
 version="${tag#v}"
 if [ -z "$version" ]; then
   version="dev"
-  echo "deploy: точного тега нет — версия сервера \"dev\" (версионный gate отключён)" >&2
+  echo "deploy: тегов в репозитории нет — версия сервера \"dev\" (версионный gate отключён)" >&2
 fi
 export LENG_VERSION="$version"
 
