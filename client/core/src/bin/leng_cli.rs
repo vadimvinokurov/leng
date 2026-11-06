@@ -4,9 +4,10 @@
 //! errors included), 2 on a usage error (usage goes to stderr).
 
 use leng_core::api::BackendClient;
-use leng_core::config::{resolve, CliOverrides, StdEnv};
+use leng_core::config::{config_dir, migrate_config, resolve, CliOverrides, StdEnv};
 use leng_core::pipeline::{process, Hud, HudPayload};
 use leng_core::types::Source;
+use std::path::PathBuf;
 
 /// Prints each payload as one JSON line on stdout. Stable wire names
 /// (`response` / `error`) are pinned by `HudPayload`'s `Serialize` impl.
@@ -75,11 +76,18 @@ async fn trigger(args: &[String]) -> i32 {
         base_url: base_url.map(str::to_string),
         token: token.map(str::to_string),
     };
-    // config.json lives next to the executable, per the deployment spec.
-    let config_path = std::env::current_exe()
+    // The config lives outside the bundle (~/Library/Application Support/
+    // Leng on macOS); any bundled leftover is migrated there once.
+    let exe_dir = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(std::path::PathBuf::from))
-        .map(|dir| dir.join("config.json"));
+        .and_then(|exe| exe.parent().map(std::path::PathBuf::from));
+    let config_dir = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| config_dir(&home, exe_dir.as_deref()));
+    if let Some(dir) = &config_dir {
+        let _ = migrate_config(exe_dir.as_deref(), dir);
+    }
+    let config_path = config_dir.map(|dir| dir.join("config.json"));
     let resolved = match resolve(overrides, config_path.as_deref(), &StdEnv) {
         Ok(resolved) => resolved,
         Err(err) => {

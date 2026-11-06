@@ -20,7 +20,8 @@ use std::time::Instant;
 use leng_core::api::BackendClient;
 use leng_core::capture::capture;
 use leng_core::config::{
-    resolve, update_decision, write_config, CliOverrides, StdEnv, UpdateDecision,
+    config_dir, migrate_config, resolve, update_decision, write_config, CliOverrides, StdEnv,
+    UpdateDecision,
 };
 use leng_core::guard::GenerationGuard;
 use leng_core::pipeline::{process, Hud, HudPayload};
@@ -167,11 +168,22 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 /// Config resolution for the GUI: flags > config.json next to the
 /// executable > LENG_* env (the same chain as the CLI, `leng_core::config`).
 /// Unresolved config is a first-trigger error, not a startup panic.
-fn resolve_backend_config() -> Option<leng_core::config::ResolvedConfig> {
-    let config_path = std::env::current_exe()
+/// The canonical settings file location: `~/Library/Application Support/Leng`.
+/// Any bundled config.json from before the relocation is migrated there once
+/// at startup, before it is read or saved — an updater replaces the whole
+/// bundle and would otherwise wipe the file (observed on v0.1.8).
+fn backend_config_dir() -> Option<std::path::PathBuf> {
+    let exe_dir = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(std::path::PathBuf::from))
-        .map(|dir| dir.join("config.json"));
+        .and_then(|exe| exe.parent().map(std::path::PathBuf::from));
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    let dir = config_dir(&home, exe_dir.as_deref());
+    let _ = migrate_config(exe_dir.as_deref(), &dir);
+    Some(dir)
+}
+
+fn resolve_backend_config() -> Option<leng_core::config::ResolvedConfig> {
+    let config_path = backend_config_dir().map(|dir| dir.join("config.json"));
     let overrides = CliOverrides {
         base_url: None,
         token: None,
@@ -677,11 +689,9 @@ fn save_backend_settings(
     base_url: String,
     api_token: String,
 ) -> Result<(), String> {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(std::path::PathBuf::from))
-        .ok_or_else(|| "cannot locate the executable directory".to_string())?;
-    write_config(&exe_dir, &base_url, &api_token).map_err(|err| err.to_string())?;
+    let dir =
+        backend_config_dir().ok_or_else(|| "cannot locate the config directory".to_string())?;
+    write_config(&dir, &base_url, &api_token).map_err(|err| err.to_string())?;
     let state = app.state::<AppState>();
     match resolve_backend_config() {
         Some(cfg) => {

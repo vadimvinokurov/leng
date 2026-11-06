@@ -208,3 +208,58 @@ fn write_config_rejects_blank_values() {
         "no file on rejected write"
     );
 }
+
+#[test]
+fn config_dir_on_macos_is_outside_the_bundle() {
+    use leng_core::config::config_dir;
+    let home = PathBuf::from("/Users/tester");
+    let exe = PathBuf::from("/Applications/Leng.app/Contents/MacOS");
+
+    let dir = config_dir(&home, Some(&exe));
+    assert!(
+        dir.ends_with("Library/Application Support/Leng"),
+        "macOS config must live in Application Support, got {dir:?}"
+    );
+    assert!(
+        !dir.starts_with(&exe),
+        "the config must not live inside the updatable bundle"
+    );
+}
+
+#[test]
+fn migrate_config_moves_bundled_file_outside_the_bundle() {
+    use leng_core::config::migrate_config;
+    let exe = temp_dir("bundle");
+    let target = temp_dir("appsupport");
+    let bundled = exe.join("config.json");
+    std::fs::write(&bundled, FULL_FILE).expect("seed bundled config");
+
+    migrate_config(Some(&exe), &target).expect("migration succeeds");
+    let migrated = target.join("config.json");
+    assert_eq!(
+        std::fs::read_to_string(&migrated).expect("migrated file"),
+        FULL_FILE,
+        "the bundled config lands at the canonical location"
+    );
+    // A second migration is a no-op and never overwrites the new location.
+    std::fs::write(
+        &bundled,
+        r#"{"backend_url": "http://stale:9", "api_token": "stale"}"#,
+    )
+    .expect("re-seed bundled config");
+    migrate_config(Some(&exe), &target).expect("idempotent migration");
+    assert_eq!(
+        std::fs::read_to_string(&migrated).expect("unchanged file"),
+        FULL_FILE,
+        "an existing canonical config is never overwritten by migration"
+    );
+}
+
+#[test]
+fn migrate_config_without_bundled_file_is_a_no_op() {
+    use leng_core::config::migrate_config;
+    let target = temp_dir("appsupport-empty");
+    migrate_config(None, &target).expect("nothing to migrate is fine");
+    migrate_config(Some(&temp_dir("no-config")), &target).expect("missing file is fine");
+    assert!(!target.join("config.json").exists());
+}

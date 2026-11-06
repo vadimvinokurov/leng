@@ -2,7 +2,7 @@
 //! the CLI: CLI flags > `config.json` next to the executable >
 //! `LENG_*` environment variables.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct CliOverrides {
     pub base_url: Option<String>,
@@ -100,6 +100,53 @@ pub fn write_config(dir: &Path, base_url: &str, token: &str) -> Result<(), Confi
     res
 }
 
+/// The canonical config directory, OUTSIDE the updatable app bundle: an
+/// updater replaces the whole bundle and would wipe a config inside it
+/// (observed on the v0.1.8 live update, 2026-11-06). On macOS this is
+/// ~/Library/Application Support/Leng; platforms without a shipped
+/// updater convention keep the bundled location until their port lands
+/// (PROJECT.md §3). `home` goes in so tests can pin it.
+pub fn config_dir(home: &Path, exe_dir: Option<&Path>) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/Leng")
+    } else {
+        exe_dir
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| home.to_path_buf())
+    }
+}
+
+/// Move a config.json that sits next to the executable (the pre-relocation
+/// place) into `target_dir`. Skipped when there is nothing to move or the
+/// canonical file already exists — a migration never overwrites the live
+/// config. The copy lands atomically (temp file + rename in the target
+/// directory).
+pub fn migrate_config(exe_dir: Option<&Path>, target_dir: &Path) -> Result<(), ConfigError> {
+    let Some(exe_dir) = exe_dir else {
+        return Ok(());
+    };
+    let bundled = exe_dir.join("config.json");
+    if !bundled.exists() {
+        return Ok(());
+    }
+    let target = target_dir.join("config.json");
+    if target.exists() {
+        return Ok(());
+    }
+    let contents = std::fs::read(&bundled)
+        .map_err(|err| ConfigError(format!("cannot read {}: {err}", bundled.display())))?;
+    let temp = target_dir.join(".config.json.migrate.tmp");
+    let res = (|| -> Result<(), ConfigError> {
+        std::fs::write(&temp, contents)
+            .map_err(|err| ConfigError(format!("cannot write {}: {err}", temp.display())))?;
+        std::fs::rename(&temp, &target)
+            .map_err(|err| ConfigError(format!("cannot place {}: {err}", target.display())))?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&temp);
+    res
+}
+
 pub fn resolve(
     overrides: CliOverrides,
     config_path: Option<&Path>,
@@ -114,8 +161,8 @@ pub fn resolve(
     };
     let missing = |what: &str| -> ConfigError {
         ConfigError(format!(
-            "{what} is not configured: pass a config.json with it next to the \
-             executable, set the LENG_* env var, or use the CLI flags"
+            "{what} is not configured: pass a config.json in the application \
+             support directory (config_dir), set the LENG_* env var, or use the CLI flags"
         ))
     };
     let base_url = overrides
