@@ -7,3 +7,4 @@ client/src-tauri/gen/
 docs/superpowers/
 config.json
 .leng-signing/
+.superpowers/
