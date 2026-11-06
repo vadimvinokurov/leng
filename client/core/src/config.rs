@@ -87,6 +87,8 @@ pub fn write_config(dir: &Path, base_url: &str, token: &str) -> Result<(), Confi
         api_token: token.to_string(),
     })
     .expect("two-string serialization cannot fail");
+    std::fs::create_dir_all(dir)
+        .map_err(|err| ConfigError(format!("cannot create {}: {err}", dir.display())))?;
     let path = dir.join("config.json");
     let temp = dir.join(".config.json.tmp");
     let res = (|| -> Result<(), ConfigError> {
@@ -133,6 +135,8 @@ pub fn migrate_config(exe_dir: Option<&Path>, target_dir: &Path) -> Result<(), C
     if target.exists() {
         return Ok(());
     }
+    std::fs::create_dir_all(target_dir)
+        .map_err(|err| ConfigError(format!("cannot create {}: {err}", target_dir.display())))?;
     let contents = std::fs::read(&bundled)
         .map_err(|err| ConfigError(format!("cannot read {}: {err}", bundled.display())))?;
     let temp = target_dir.join(".config.json.migrate.tmp");
