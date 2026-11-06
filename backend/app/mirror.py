@@ -64,38 +64,64 @@ class HttpxTransport:
 def sync_mirror(cfg: Config, transport: Transport) -> None:
     """Mirror the release tagged v<cfg.version> into clients_dir.
 
-    Existing files are never re-downloaded (the fetch happens only for
-    files that are missing). The manifest is downloaded and parsed
-    BEFORE anything is written, and every file lands through an atomic
-    temp-file + replace, so a crash or a failed download can never leave
-    a truncated or corrupt file in the cache — sync skips existing
-    files, which would keep serving it. The manifest is written last:
-    only a fully mirrored release is advertised to clients. Any failure
-    raises MirrorError; the caller (startup task or /v1/clients/refresh)
-    decides how to report it.
+    A cached manifest is reused only when it names the running server's
+    version; anything else (a previous release's manifest, a corrupt
+    file) is discarded and re-downloaded — together with the artifacts,
+    even when their names repeat across releases (final review: the
+    stale-cache bug of 2026-11-06). Existing files of the CURRENT
+    release are never re-downloaded. The manifest is downloaded and
+    parsed BEFORE anything is written, and every file lands through an
+    atomic temp-file + replace, so a crash or a failed download can
+    never leave a truncated or corrupt file in the cache — sync skips
+    existing files, which would keep serving it. The manifest is written
+    last: only a fully mirrored release is advertised to clients. Any
+    failure raises MirrorError; the caller (startup task or
+    /v1/clients/refresh) decides how to report it.
     """
     target = clients_dir(cfg)
     target.mkdir(parents=True, exist_ok=True)
 
     manifest_path = target / MANIFEST_NAME
+    cached: bytes | None = None
+    fresh = True
     if manifest_path.exists():
-        manifest = manifest_path.read_bytes()
-        # Same validation as a freshly downloaded manifest would get.
-        _platform_urls(manifest)
-    else:
+        cached = manifest_path.read_bytes()
+        try:
+            fresh = _manifest_version(cached) != cfg.version
+        except MirrorError:
+            cached = None  # unparseable cache: treat as absent
+        else:
+            if not fresh:
+                _platform_urls(cached)  # validate the cache shape
+
+    if cached is None or fresh:
         manifest = _fetch(transport, latest_json_url(cfg))
         _platform_urls(manifest)
+    else:
+        manifest = cached
 
     for url in _platform_urls(manifest):
         name = urlparse(url).path.rsplit("/", 1)[-1]
         dest = target / name
-        if dest.exists():
+        if dest.exists() and not fresh:
             continue
         content = _fetch(transport, url)
         _write(dest, content)
 
-    if not manifest_path.exists():
+    if fresh:
         _write(manifest_path, manifest)
+
+
+def _manifest_version(manifest: bytes) -> str | None:
+    """The `version` field of a manifest; malformed manifests raise."""
+    try:
+        parsed = json.loads(manifest)
+        version = parsed["version"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise MirrorError(f"malformed updater manifest: {exc}") from exc
+    if not isinstance(version, str):
+        raise MirrorError(f"malformed updater manifest: version {version!r}")
+    return version
 
 
 def _fetch(transport: Transport, url: str) -> bytes:

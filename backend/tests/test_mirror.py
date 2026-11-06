@@ -2,6 +2,8 @@
 startup wiring (release version syncs; dev skips; failures never break
 the server)."""
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -221,3 +223,75 @@ def test_invalid_manifest_cache_is_not_written(release_cfg):
 
     clients = mirror.clients_dir(release_cfg)
     assert not (clients / "latest.json").exists()
+
+
+def test_upgraded_server_refreshes_stale_manifest(release_cfg, tmp_path):
+    """The real upgrade path: the server moves from one release version
+    to the next, the cache already holds the previous manifest. A cache
+    tied to a different version than the running server must be fully
+    refreshed — including files whose names repeat across releases."""
+    base = f"https://github.com/{release_cfg.github_repo}"
+    transport = FakeTransport(
+        {
+            f"{base}/releases/download/v1.2.0/latest.json": manifest_bytes(
+                release_cfg
+            ),
+            f"{base}/releases/download/v1.2.0/Leng.app.tar.gz": b"mac-blob-v1",
+            f"{base}/releases/download/v1.2.0/Leng_1.2.0_x64-setup.exe": b"win-blob-v1",
+        }
+    )
+    mirror.sync_mirror(release_cfg, transport)
+
+    new_cfg = make_cfg(tmp_path, version="1.3.0")
+    new_base = f"https://github.com/{new_cfg.github_repo}"
+    new_manifest = json.dumps(
+        {
+            "version": "1.3.0",
+            "pub_date": "2026-11-06T00:00:00Z",
+            "platforms": {
+                "macos": {
+                    "signature": "sig",
+                    "url": f"{new_base}/releases/download/v1.3.0/Leng.app.tar.gz",
+                },
+            },
+        }
+    ).encode()
+    upgrade_transport = FakeTransport(
+        {
+            f"{new_base}/releases/download/v1.3.0/latest.json": new_manifest,
+            f"{new_base}/releases/download/v1.3.0/Leng.app.tar.gz": b"mac-blob-v2",
+        }
+    )
+
+    mirror.sync_mirror(new_cfg, upgrade_transport)
+
+    clients = mirror.clients_dir(new_cfg)
+    assert json.loads((clients / "latest.json").read_bytes())["version"] == "1.3.0"
+    assert (clients / "Leng.app.tar.gz").read_bytes() == b"mac-blob-v2", (
+        "a same-named artifact of the old release must be overwritten"
+    )
+
+
+def test_malformed_cached_manifest_is_refreshed(release_cfg, tmp_path):
+    """A corrupt cache must not wedge the mirror forever: an
+    unparseable cached manifest is thrown away and re-downloaded."""
+    base = f"https://github.com/{release_cfg.github_repo}"
+    clients = mirror.clients_dir(release_cfg)
+    clients.mkdir(parents=True)
+    (clients / "latest.json").write_bytes(b"garbage not json")
+    (clients / "Leng.app.tar.gz").write_bytes(b"stale-blob")
+
+    transport = FakeTransport(
+        {
+            f"{base}/releases/download/v1.2.0/latest.json": manifest_bytes(
+                release_cfg
+            ),
+            f"{base}/releases/download/v1.2.0/Leng.app.tar.gz": b"mac-blob",
+            f"{base}/releases/download/v1.2.0/Leng_1.2.0_x64-setup.exe": b"win-blob",
+        }
+    )
+
+    mirror.sync_mirror(release_cfg, transport)
+
+    assert json.loads((clients / "latest.json").read_bytes())["version"] == "1.2.0"
+    assert (clients / "Leng.app.tar.gz").read_bytes() == b"mac-blob"
