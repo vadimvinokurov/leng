@@ -19,7 +19,9 @@ use std::time::Instant;
 
 use leng_core::api::BackendClient;
 use leng_core::capture::capture;
-use leng_core::config::{resolve, update_decision, CliOverrides, StdEnv, UpdateDecision};
+use leng_core::config::{
+    resolve, update_decision, write_config, CliOverrides, StdEnv, UpdateDecision,
+};
 use leng_core::guard::GenerationGuard;
 use leng_core::pipeline::{process, Hud, HudPayload};
 use leng_core::platform::macos::{
@@ -41,6 +43,8 @@ use tauri_plugin_updater::UpdaterExt;
 const HUD_LABEL: &str = "hud";
 /// Label of the Accessibility onboarding window.
 const PERMISSION_LABEL: &str = "permission";
+/// Label of the settings window (tray «Настройки…»).
+const SETTINGS_LABEL: &str = "settings";
 /// Webview -> Rust: the HUD page has finished loading and listens.
 const READY_EVENT: &str = "leng:ready";
 /// Rust -> webview: the pipeline payload, as the serialized `HudPayload` JSON
@@ -49,13 +53,14 @@ const PAYLOAD_EVENT: &str = "leng:payload";
 
 /// Config and clipboard state shared between the trigger paths.
 struct AppState {
-    /// None when no config source (flags/config.json/env) resolves: the
+    /// Reloadable backend client: the settings window rebuilds it after
+    /// saving config.json. `None` when no config source resolves: the
     /// error surfaces at the first trigger, not as a startup panic.
-    api: Option<Arc<BackendClient>>,
+    api: Mutex<Option<Arc<BackendClient>>>,
     client_name: String,
     /// The resolved backend base URL, for the updater endpoint (`None`
-    /// when the config did not resolve).
-    base_url: Option<String>,
+    /// when the config did not resolve). Reloaded with `api`.
+    base_url: Mutex<Option<String>>,
     /// Last clipboard text captured, for the fresh-copy filter.
     previous_clipboard: Mutex<Option<String>>,
     /// Last payload shown, replayed when a freshly opened HUD page signals
@@ -80,17 +85,19 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             open_accessibility_settings,
             check_permission,
-            render_hud
+            render_hud,
+            get_backend_settings,
+            save_backend_settings
         ])
         .manage(AppState {
-            api: resolved.as_ref().map(|cfg| {
+            api: Mutex::new(resolved.as_ref().map(|cfg| {
                 Arc::new(BackendClient::new(
                     &cfg.base_url,
                     &cfg.token,
                     env!("CARGO_PKG_VERSION"),
                 ))
-            }),
-            base_url: resolved.as_ref().map(|cfg| cfg.base_url.clone()),
+            })),
+            base_url: Mutex::new(resolved.as_ref().map(|cfg| cfg.base_url.clone())),
             client_name: resolve_client_name(),
             previous_clipboard: Mutex::new(None),
             last_payload: Mutex::new(None),
@@ -127,9 +134,13 @@ fn main() {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let trigger_item =
         MenuItem::with_id(app, "trigger-now", "Триггер сейчас", true, None::<&str>).unwrap();
+    let settings_item =
+        MenuItem::with_id(app, "settings", "Настройки…", true, None::<&str>).unwrap();
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>).unwrap();
     let menu = MenuBuilder::new(app)
         .item(&trigger_item)
+        .separator()
+        .item(&settings_item)
         .separator()
         .item(&quit_item)
         .build()
@@ -142,6 +153,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "trigger-now" => trigger_now(app, true),
+            "settings" => open_settings_window(app),
             "update-now" => update_now(app),
             "quit" => app.exit(0),
             _ => {}
@@ -191,8 +203,8 @@ fn resolve_client_name() -> String {
 }
 
 fn missing_config_message() -> String {
-    "нет конфига: положи config.json (backend_url и api_token) рядом с \
-     исполнимым или задай LENG_BACKEND_URL и LENG_API_TOKEN"
+    "нет конфига: задайте адрес и ключ в трее → «Настройки…» (или \
+     config.json рядом с исполнимым, либо LENG_BACKEND_URL и LENG_API_TOKEN)"
         .to_string()
 }
 
@@ -204,7 +216,8 @@ fn spawn_update_check(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let some_api = {
             let state = app.state::<AppState>();
-            state.api.clone()
+            let x = state.api.lock().unwrap().clone();
+            x
         };
         let Some(api) = some_api else {
             return;
@@ -238,9 +251,12 @@ fn offer_update_in_tray(app: &AppHandle, version: &str) -> tauri::Result<()> {
 
 fn rebuild_tray_menu(app: &AppHandle, update_item: &MenuItem<tauri::Wry>) -> tauri::Result<()> {
     let trigger_item = MenuItem::with_id(app, "trigger-now", "Триггер сейчас", true, None::<&str>)?;
+    let settings_item = MenuItem::with_id(app, "settings", "Настройки…", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = MenuBuilder::new(app)
         .item(&trigger_item)
+        .separator()
+        .item(&settings_item)
         .separator()
         .item(update_item)
         .separator()
@@ -259,7 +275,8 @@ fn rebuild_tray_menu(app: &AppHandle, update_item: &MenuItem<tauri::Wry>) -> tau
 fn update_now(app: &AppHandle) {
     let base_url = {
         let state = app.state::<AppState>();
-        state.base_url.clone()
+        let x = state.base_url.lock().unwrap().clone();
+        x
     };
     let Some(base_url) = base_url else {
         show_payload(app, HudPayload::Error(missing_config_message()));
@@ -372,7 +389,7 @@ fn trigger_now(app: &AppHandle, probe: bool) {
         return;
     };
 
-    let Some(api) = state.api.clone() else {
+    let Some(api) = state.api.lock().unwrap().clone() else {
         // Deliberately not recording the marker: a retry after fixing the
         // environment re-triggers the same text.
         show_payload(app, HudPayload::Error(missing_config_message()));
@@ -589,6 +606,78 @@ fn open_permission_window(app: &AppHandle) {
 fn render_hud(payload_json: String) -> Result<String, String> {
     let payload = HudPayload::from_wire_json(&payload_json).map_err(|err| err.to_string())?;
     Ok(leng_core::render::render_hud_html(&payload))
+}
+
+/// Open (or un-hide) the settings window: backend URL and API token,
+/// saved as the same `config.json` the resolution chain reads.
+fn open_settings_window(app: &AppHandle) {
+    if let Some(existing) = app.get_webview_window(SETTINGS_LABEL) {
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return;
+    }
+    let window =
+        WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::App("settings.html".into()))
+            .title("Leng — Настройки")
+            .inner_size(440.0, 260.0)
+            .resizable(false)
+            .build();
+    if let Err(err) = window {
+        eprintln!("leng: failed to open settings window: {err}");
+    }
+}
+
+/// Current settings for the window prefill: the active resolution (file
+/// or env), `None`s when nothing is configured yet.
+#[derive(serde::Serialize)]
+struct BackendSettings {
+    base_url: Option<String>,
+    api_token: Option<String>,
+}
+
+#[tauri::command]
+fn get_backend_settings() -> Result<BackendSettings, String> {
+    match resolve_backend_config() {
+        Some(cfg) => Ok(BackendSettings {
+            base_url: Some(cfg.base_url),
+            api_token: Some(cfg.token),
+        }),
+        None => Ok(BackendSettings {
+            base_url: None,
+            api_token: None,
+        }),
+    }
+}
+
+/// Save the fields and make them live immediately: write config.json
+/// next to the executable, then rebuild the backend client of the app
+/// state (the next request uses the new connection, no restart).
+#[tauri::command]
+fn save_backend_settings(
+    app: AppHandle,
+    base_url: String,
+    api_token: String,
+) -> Result<(), String> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::PathBuf::from))
+        .ok_or_else(|| "cannot locate the executable directory".to_string())?;
+    write_config(&exe_dir, &base_url, &api_token).map_err(|err| err.to_string())?;
+    let state = app.state::<AppState>();
+    match resolve_backend_config() {
+        Some(cfg) => {
+            *state.api.lock().unwrap() = Some(Arc::new(BackendClient::new(
+                &cfg.base_url,
+                &cfg.token,
+                env!("CARGO_PKG_VERSION"),
+            )));
+            *state.base_url.lock().unwrap() = Some(cfg.base_url);
+        }
+        // Unreachable through the UI (the write validates both fields),
+        // but the honest fallback is keeping the previous client.
+        None => eprintln!("leng: config still unresolved after settings save"),
+    }
+    Ok(())
 }
 
 /// «Открыть настройки» — send the user to the Accessibility pane.

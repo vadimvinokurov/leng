@@ -62,6 +62,44 @@ fn read_config(path: &Path) -> Result<FileConfig, ConfigError> {
         .map_err(|err| ConfigError(format!("invalid JSON in {}: {err}", path.display())))
 }
 
+/// The settings written by the UI: the same shape `FileConfig` reads.
+#[derive(serde::Serialize)]
+struct PersistableConfig {
+    backend_url: String,
+    api_token: String,
+}
+
+/// Write `config.json` into `dir` (next to the executable in
+/// production). Blank url or token is rejected — the file must never
+/// contain values the resolution chain would fail on. The write lands
+/// through a temp file + rename, so a crash cannot leave a torn file.
+pub fn write_config(dir: &Path, base_url: &str, token: &str) -> Result<(), ConfigError> {
+    let base_url = base_url.trim();
+    let token = token.trim();
+    if base_url.is_empty() {
+        return Err(ConfigError("backend_url is required".into()));
+    }
+    if token.is_empty() {
+        return Err(ConfigError("api_token is required".into()));
+    }
+    let json = serde_json::to_string(&PersistableConfig {
+        backend_url: base_url.to_string(),
+        api_token: token.to_string(),
+    })
+    .expect("two-string serialization cannot fail");
+    let path = dir.join("config.json");
+    let temp = dir.join(".config.json.tmp");
+    let res = (|| -> Result<(), ConfigError> {
+        std::fs::write(&temp, json)
+            .map_err(|err| ConfigError(format!("cannot write {}: {err}", temp.display())))?;
+        std::fs::rename(&temp, &path)
+            .map_err(|err| ConfigError(format!("cannot replace {}: {err}", path.display())))?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&temp);
+    res
+}
+
 pub fn resolve(
     overrides: CliOverrides,
     config_path: Option<&Path>,

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Leng — Настройки</title>
+  <style>
+    :root {
+      --surface: #f5f5f7;
+      --text: #1d1d1f;
+      --text-muted: #55555a;
+      --accent: #6d5ae6;
+      --accent-text: #ffffff;
+      --border: #d6d6da;
+      --error: #c0392b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+    }
+
+    html,
+    body {
+      height: 100%;
+      overflow: hidden;
+    }
+
+    body {
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--text);
+      background: var(--surface);
+      padding: 16px 20px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    h1 {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    p {
+      color: var(--text-muted);
+    }
+
+    fieldset {
+      border: none;
+      padding: 0;
+    }
+
+    label {
+      display: block;
+      margin: 12px 0 4px;
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    input {
+      font: inherit;
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #ffffff;
+      color: var(--text);
+      min-height: 32px;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .error {
+      color: var(--error);
+      min-height: 20px;
+      margin-top: 8px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    button {
+      font: inherit;
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      min-height: 32px;
+    }
+
+    button#save {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-text);
+      font-weight: 600;
+      margin-left: auto;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+  </style>
+</head>
+<body>
+  <h1>Настройки</h1>
+  <p>Сервер и его изменения применяются сразу, без перезапуска.</p>
+  <fieldset>
+    <legend hidden>Backend</legend>
+    <label for="backend-url">Адрес сервера</label>
+    <input id="backend-url" type="text" placeholder="http://localhost:28080" autocomplete="off" />
+    <label for="api-token">API-ключ</label>
+    <input id="api-token" type="password" autocomplete="off" spellcheck="false" />
+  </fieldset>
+  <div class="error" id="error"></div>
+  <div class="actions">
+    <button id="cancel" type="button">Отмена</button>
+    <button id="save" type="button">Сохранить</button>
+  </div>
+
+  <script>
+    const tauri = window.__TAURI__;
+    const url = document.getElementById("backend-url");
+    const token = document.getElementById("api-token");
+    const saveButton = document.getElementById("save");
+    const errorLine = document.getElementById("error");
+
+    (async () => {
+      const settings = await tauri.core.invoke("get_backend_settings");
+      if (settings.base_url !== null) url.value = settings.base_url;
+      if (settings.api_token !== null) token.value = settings.api_token;
+    })();
+
+    document.getElementById("cancel").addEventListener("click", () => {
+      tauri.window.getCurrentWindow().close();
+    });
+
+    saveButton.addEventListener("click", async () => {
+      errorLine.textContent = "";
+      saveButton.disabled = true;
+      try {
+        await tauri.core.invoke("save_backend_settings", {
+          baseUrl: url.value,
+          apiToken: token.value,
+        });
+        await tauri.window.getCurrentWindow().close();
+      } catch (err) {
+        errorLine.textContent = String(err);
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

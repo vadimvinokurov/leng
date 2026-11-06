@@ -154,3 +154,57 @@ fn update_decision_other_version_offers() {
         }
     );
 }
+
+/// A unique temp directory to write settings into.
+fn temp_dir(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "leng-settings-test-{}-{}-{}",
+        tag,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock works")
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    dir
+}
+
+#[test]
+fn write_config_creates_file_that_resolves() {
+    use leng_core::config::write_config;
+    let dir = temp_dir("create");
+    write_config(&dir, "http://new:1", "new-token").expect("write settings");
+
+    let resolved = resolve(NO_FLAGS, Some(&dir.join("config.json")), &MapEnv::new(&[]))
+        .expect("written config resolves");
+    assert_eq!(resolved.base_url, "http://new:1");
+    assert_eq!(resolved.token, "new-token");
+}
+
+#[test]
+fn write_config_overwrites_previous_values() {
+    use leng_core::config::write_config;
+    let dir = temp_dir("overwrite");
+    write_config(&dir, "http://old:1", "old-token").expect("first write");
+    write_config(&dir, "http://new:2", "new-token").expect("second write");
+
+    let resolved = resolve(NO_FLAGS, Some(&dir.join("config.json")), &MapEnv::new(&[]))
+        .expect("overwritten config resolves");
+    assert_eq!(resolved.base_url, "http://new:2");
+    assert_eq!(resolved.token, "new-token");
+}
+
+#[test]
+fn write_config_rejects_blank_values() {
+    use leng_core::config::write_config;
+    let dir = temp_dir("blank");
+    let url_err = write_config(&dir, "   ", "tok").expect_err("blank url rejected");
+    let token_err = write_config(&dir, "http://x", "").expect_err("blank token rejected");
+    assert!(url_err.0.contains("backend_url"));
+    assert!(token_err.0.contains("api_token"));
+    assert!(
+        !dir.join("config.json").exists(),
+        "no file on rejected write"
+    );
+}
