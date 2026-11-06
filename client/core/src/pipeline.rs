@@ -100,6 +100,11 @@ impl<'de> Deserialize<'de> for HudPayload {
 /// Sink for processed selections.
 pub trait Hud: Send + Sync {
     fn show(&self, payload: HudPayload);
+
+    /// The backend answered 409 `version_mismatch`: the client is overdue
+    /// for an update, the tray should offer it. Default no-op keeps
+    /// headless sinks (tests, CLI) untouched.
+    fn offer_update(&self) {}
 }
 
 /// Trim the selection, gate empties before any backend call, and hand the
@@ -118,7 +123,15 @@ pub async fn process(
     }
     let payload = match api.query(text, source, client_name).await {
         Ok(response) => HudPayload::Response(response),
-        Err(err) => HudPayload::Error(describe(err)),
+        Err(err) => {
+            // The mismatch is also a tray event: the client is running an
+            // old release against a newer server, so the tray should offer
+            // the update (manual check §6, «после деплая новой версии»).
+            if err == ApiError::Status(409, "version_mismatch".into()) {
+                hud.offer_update();
+            }
+            HudPayload::Error(describe(err))
+        }
     };
     hud.show(payload);
 }

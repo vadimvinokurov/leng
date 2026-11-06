@@ -208,32 +208,37 @@ fn missing_config_message() -> String {
         .to_string()
 }
 
-/// Fire-and-forget update check at startup: asks the server's public
-/// health endpoint for its version and, when it differs from ours, adds
+/// Fire-and-forget version check: asks the server's public health
+/// endpoint for its version and, when it differs from ours, adds
 /// «Обновить приложение до vX.Y.Z» to the tray. Any error leaves the
-/// client quietly working (no update offer); nothing blocks startup.
-fn spawn_update_check(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        let some_api = {
-            let state = app.state::<AppState>();
-            let x = state.api.lock().unwrap().clone();
-            x
-        };
-        let Some(api) = some_api else {
-            return;
-        };
-        let health = match api.health().await {
-            Ok(health) => health,
-            Err(_) => return,
-        };
-        if let UpdateDecision::Offer { version } =
-            update_decision(env!("CARGO_PKG_VERSION"), &health.version)
-        {
-            if let Err(err) = offer_update_in_tray(&app, &version) {
-                eprintln!("leng: failed to offer update in tray: {err}");
-            }
+/// client quietly working (no update offer); nothing blocks the caller.
+/// Shared by the startup check and the pipeline's 409 handler.
+async fn update_check(app: AppHandle) {
+    let some_api = {
+        let state = app.state::<AppState>();
+        let x = state.api.lock().unwrap().clone();
+        x
+    };
+    let Some(api) = some_api else {
+        return;
+    };
+    let health = match api.health().await {
+        Ok(health) => health,
+        Err(_) => return,
+    };
+    if let UpdateDecision::Offer { version } =
+        update_decision(env!("CARGO_PKG_VERSION"), &health.version)
+    {
+        if let Err(err) = offer_update_in_tray(&app, &version) {
+            eprintln!("leng: failed to offer update in tray: {err}");
         }
-    });
+    }
+}
+
+/// Startup probe; the same check re-runs on every 409 `version_mismatch`
+/// the pipeline reports through `Hud::offer_update`.
+fn spawn_update_check(app: AppHandle) {
+    tauri::async_runtime::spawn(update_check(app));
 }
 
 /// Rebuild the tray menu with the update item in front. The menu event
@@ -535,6 +540,14 @@ struct HudWindow {
 impl Hud for HudWindow {
     fn show(&self, payload: HudPayload) {
         commit_payload(&self.app, self.token, payload);
+    }
+
+    /// 409 `version_mismatch` from a trigger: the running client is out
+    /// of date against this server — run the same version check the
+    /// startup does so the tray offers the update.
+    fn offer_update(&self) {
+        let handle = self.app.clone();
+        tauri::async_runtime::spawn(update_check(handle));
     }
 }
 

@@ -9,12 +9,14 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 struct CaptureHud {
     shown: std::sync::Mutex<Vec<HudPayload>>,
+    offered: std::sync::atomic::AtomicUsize,
 }
 
 impl CaptureHud {
     fn new() -> Self {
         Self {
             shown: std::sync::Mutex::new(Vec::new()),
+            offered: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -22,6 +24,11 @@ impl CaptureHud {
 impl Hud for CaptureHud {
     fn show(&self, payload: HudPayload) {
         self.shown.lock().unwrap().push(payload);
+    }
+
+    fn offer_update(&self) {
+        self.offered
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -149,4 +156,22 @@ async fn version_mismatch_shows_update_hint() {
         }
         other => panic!("expected a single error payload, got {other:?}"),
     }
+    assert_eq!(hud.offered.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// Any other error must not pretend an update exists.
+#[tokio::test]
+async fn other_error_does_not_offer_update() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/query"))
+        .respond_with(ResponseTemplate::new(502).set_body_json(json!({"error": "llm_error"})))
+        .mount(&server)
+        .await;
+    let api = BackendClient::new(&server.uri(), "secret", env!("CARGO_PKG_VERSION"));
+    let hud = CaptureHud::new();
+
+    process("hello", &api, &hud, &source(), "leng-cli").await;
+
+    assert_eq!(hud.offered.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
