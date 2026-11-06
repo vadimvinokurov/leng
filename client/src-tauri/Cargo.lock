@@ -1918,7 +1918,7 @@ dependencies = [
 
 [[package]]
 name = "leng"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "hostname",
  "leng-core",
@@ -1933,7 +1933,7 @@ dependencies = [
 
 [[package]]
 name = "leng-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "block2",
  "objc2",
