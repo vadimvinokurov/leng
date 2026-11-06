@@ -1,6 +1,6 @@
 [package]
 name = "leng"
-version = "0.1.9"
+version = "0.1.10"
 description = "Leng desktop client: HUD window, tray, eventTap-triggered capture"
 edition = "2021"
 
