@@ -54,6 +54,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # The signing identity is a stable self-signed "Leng Developer"
+      # certificate: ad-hoc linker signing produces a fresh identity per
+      # build, and TCC ties permissions to it, so every update dropped the
+      # Accessibility grant (the 2026-11-06 incident). The cert lives in
+      # repo secrets; the identity name is fixed in tauri.conf.json.
+      - name: Install the macOS signing identity
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERT_B64: ${{ secrets.MACOS_SIGNING_CERT }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: random-trust-no-one
+        run: |
+          echo "$MACOS_CERT_B64" | base64 --decode > /tmp/leng-signing.p12
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" leng-signing.keychain
+          security list-keychains -d user -s "$(security list-keychains -d user | tr -d '"')" leng-signing.keychain
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" leng-signing.keychain
+          security import /tmp/leng-signing.p12 -k leng-signing.keychain -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$MACOS_KEYCHAIN_PASSWORD" leng-signing.keychain
+          rm -f /tmp/leng-signing.p12
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked
       # tauri-action's own create-release call 403s on this repo
