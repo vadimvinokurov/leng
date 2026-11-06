@@ -1,5 +1,6 @@
-//! Leng desktop client (Tauri 2): tray, permission onboarding, HUD window,
-//! and the glue between the global event monitors and `leng_core::pipeline`.
+//! Leng desktop client (Tauri 2): tray, HUD window, the Accessibility
+//! consent wait, and the glue between the global event monitors and
+//! `leng_core::pipeline`.
 //!
 //! Run-loop ruling (Task 14): tauri runs `-[NSApplication run]` itself, so
 //! `leng_core::platform::macos::run_event_loop` (which would start its own
@@ -13,7 +14,6 @@
 //! contracts it consumes — `DoubleTap`, `capture`, `pipeline::process`,
 //! `parse_tab` — are covered by `client/core/tests/`.
 
-use std::process::Command as StdCommand;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -44,8 +44,6 @@ use tauri_plugin_updater::UpdaterExt;
 
 /// Label of the on-demand HUD webview window.
 const HUD_LABEL: &str = "hud";
-/// Label of the Accessibility onboarding window.
-const PERMISSION_LABEL: &str = "permission";
 /// Label of the settings window (tray «Настройки…»).
 const SETTINGS_LABEL: &str = "settings";
 /// Webview -> Rust: the HUD page has finished loading and listens.
@@ -86,8 +84,6 @@ fn main() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            open_accessibility_settings,
-            check_permission,
             render_hud,
             get_backend_settings,
             save_backend_settings
@@ -342,20 +338,31 @@ fn show_payload_now(app: &AppHandle, payload: HudPayload) {
     });
 }
 
-/// Install the monitors when Accessibility is already granted, otherwise
-/// open the onboarding window and wait for the «Проверить снова» command.
-/// Called at startup and after each re-check; idempotent.
+/// Install the monitors when Accessibility is already granted; otherwise
+/// raise the system's own consent alert and wait — the system dialog and
+/// the System Settings pane are the only onboarding surfaces, the app keeps
+/// no webview window of its own. Once TCC reports the grant, the trigger
+/// installs on the main thread. Called at startup; the wait is one
+/// background poll, so re-entry never stacks duplicates.
 fn ensure_trigger(app: &AppHandle) {
     if permission_granted() {
         install_trigger(app);
-    } else {
-        eprintln!("leng: Accessibility permission not granted; trigger not installed");
-        // The system prompt: macOS raises its own alert and adds the app
-        // to the Accessibility list on consent, no manual "+"-hunting in
-        // System Settings.
-        let _ = request_accessibility_permission();
-        open_permission_window(app);
+        return;
     }
+    // The system prompt: macOS raises its «Leng wants to control your
+    // computer» alert and adds the app to the Accessibility list on
+    // consent.
+    let _ = request_accessibility_permission();
+    eprintln!("leng: waiting for the Accessibility consent in System Settings");
+    let waiter = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if permission_granted() {
+            let handle = waiter.clone();
+            let _ = waiter.run_on_main_thread(move || install_trigger(&handle));
+            return;
+        }
+    });
 }
 
 /// One-time installation of the double-Cmd+C trigger and the mouse-down
@@ -623,27 +630,6 @@ fn show_payload(app: &AppHandle, payload: HudPayload) {
     commit_payload(app, token, payload);
 }
 
-/// Open (or un-hide) the Accessibility onboarding window.
-fn open_permission_window(app: &AppHandle) {
-    if let Some(existing) = app.get_webview_window(PERMISSION_LABEL) {
-        let _ = existing.show();
-        let _ = existing.set_focus();
-        return;
-    }
-    let window = WebviewWindowBuilder::new(
-        app,
-        PERMISSION_LABEL,
-        WebviewUrl::App("permission.html".into()),
-    )
-    .title("Leng — требуется разрешение")
-    .inner_size(440.0, 240.0)
-    .resizable(false)
-    .build();
-    if let Err(err) = window {
-        eprintln!("leng: failed to open permission window: {err}");
-    }
-}
-
 /// Webview -> Rust: parse the `HudPayload` wire JSON and render the HUD
 /// content fragment (pure `leng_core::render`, golden-tested in leng-core).
 /// Invalid JSON is an error for the page to display, not a panic.
@@ -722,30 +708,4 @@ fn save_backend_settings(
         None => eprintln!("leng: config still unresolved after settings save"),
     }
     Ok(())
-}
-
-/// «Открыть настройки» — send the user to the Accessibility pane.
-#[tauri::command]
-fn open_accessibility_settings() {
-    let _ = StdCommand::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-        .spawn();
-}
-
-/// «Проверить снова» — re-run the permission check; on success close the
-/// onboarding window and install the trigger on the main thread.
-#[tauri::command]
-fn check_permission(app: AppHandle) -> bool {
-    if !permission_granted() {
-        // Still not granted after «Проверить снова»: raise the system
-        // prompt again so the consent dialog stays reachable.
-        let _ = request_accessibility_permission();
-        return false;
-    }
-    if let Some(window) = app.get_webview_window(PERMISSION_LABEL) {
-        let _ = window.close();
-    }
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || install_trigger(&handle));
-    true
 }

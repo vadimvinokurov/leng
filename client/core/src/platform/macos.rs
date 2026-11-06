@@ -139,8 +139,8 @@ pub fn source_info() -> SourceInfo {
 
 /// Whether the running process has been granted Accessibility permission.
 ///
-/// The promptless check (no system dialog is raised); the onboarding window
-/// (tauri app, Task 14) owns any prompting.
+/// The promptless check (no system dialog is raised); the tauri app owns
+/// prompting (`request_accessibility_permission`).
 pub fn permission_granted() -> bool {
     // SAFETY: no options dictionary is passed (promptless), no data retained
     // by the callee.
