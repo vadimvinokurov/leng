@@ -148,6 +148,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .expect("embedded tray icon must decode");
     TrayIconBuilder::with_id("leng-tray")
         .icon(icon)
+        // Template image: macOS recolors the glyph for light/dark menu bars
+        // like the stock menu bar items.
+        .icon_as_template(true)
         .tooltip("Leng")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
