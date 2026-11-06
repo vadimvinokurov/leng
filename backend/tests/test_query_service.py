@@ -10,7 +10,8 @@ import pytest
 from app import db
 from app.llm.base import LLMError
 from app.llm.fake import FakeLLM
-from app.service.query import Source, process_query
+from app.service import persona
+from app.service.query import SYSTEM_PROMPT, Source, process_query
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "llm"
 
@@ -168,3 +169,27 @@ def test_invalid_llm_payload_raises_llm_error_without_persisting(conn):
 
     assert conn.execute("SELECT COUNT(*) AS n FROM queries").fetchone()["n"] == 0
     assert conn.execute("SELECT COUNT(*) AS n FROM word_entries").fetchone()["n"] == 0
+
+
+def test_persona_file_is_appended_to_system_prompt(conn, monkeypatch, tmp_path):
+    persona_text = (
+        "The user is a C++ game engine programmer"
+        " working on neural image compression research."
+    )
+    persona_file = tmp_path / "persona.md"
+    persona_file.write_text(persona_text, encoding="utf-8")
+    monkeypatch.setenv(persona.PERSONA_PATH_ENV, str(persona_file))
+    llm, source = make_service(conn, {"__SENTENCE_CASE__": load_fixture("sentence")})
+
+    process_query(conn, llm, SENTENCE_TEXT, source, "test-client", NOW)
+
+    assert llm.last_system == f"{SYSTEM_PROMPT}\n\n{persona_text}"
+
+
+def test_missing_persona_file_keeps_plain_system_prompt(conn, monkeypatch, tmp_path):
+    monkeypatch.setenv(persona.PERSONA_PATH_ENV, str(tmp_path / "absent.md"))
+    llm, source = make_service(conn, {"__SENTENCE_CASE__": load_fixture("sentence")})
+
+    process_query(conn, llm, SENTENCE_TEXT, source, "test-client", NOW)
+
+    assert llm.last_system == SYSTEM_PROMPT

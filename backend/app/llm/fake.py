@@ -14,11 +14,14 @@ class FakeLLM:
     def __init__(self, responses: dict[str, dict[str, Any]]) -> None:
         self._responses = responses
         self.calls = 0
+        self.last_system: str | None = None
 
-    # `system` is part of the LLMClient protocol (app.llm.base) even though
-    # FakeLLM routes only on the user prompt.
-    def complete_json(self, system: str, user: str) -> dict[str, Any]:  # noqa: ARG002
+    # `system` used to go unnoticed here (FakeLLM routes only on the user
+    # prompt), but it is part of the LLMClient protocol (app.llm.base) and
+    # is now recorded for tests that assert on the system prompt.
+    def complete_json(self, system: str, user: str) -> dict[str, Any]:
         self.calls += 1
+        self.last_system = system
         for marker, response in self._responses.items():
             if marker in user:
                 return response

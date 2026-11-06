@@ -11,11 +11,18 @@ from pydantic import ValidationError
 
 from app import prompts
 from app.llm.base import LLMClient, LLMError, LLMQueryResponse
+from app.service import persona
 from app.service.words import upsert_word
 
 # Derived from the template so the two cannot silently diverge when the
 # prompt file is edited.
 SYSTEM_PROMPT = prompts.load("translate_and_classify").splitlines()[0]
+
+
+def _system_prompt() -> str:
+    """SYSTEM_PROMPT with the persona file appended, when one is present."""
+    persona_text = persona.load_persona()
+    return f"{SYSTEM_PROMPT}\n\n{persona_text}" if persona_text else SYSTEM_PROMPT
 
 
 @dataclass
@@ -76,7 +83,7 @@ def process_query(
         kind, canonical, response = cached
     else:
         user_prompt = prompts.load("translate_and_classify").format(text=text)
-        raw = llm.complete_json(SYSTEM_PROMPT, user_prompt)
+        raw = llm.complete_json(_system_prompt(), user_prompt)
         try:
             validated = LLMQueryResponse.model_validate(raw)
         except ValidationError as exc:
