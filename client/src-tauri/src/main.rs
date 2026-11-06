@@ -34,6 +34,7 @@ use leng_core::trigger::DoubleTap;
 use leng_core::types::Source;
 use tauri::menu::{MenuBuilder, MenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{
     AppHandle, Emitter, Listener, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder,
 };
@@ -510,6 +511,20 @@ fn open_hud(app: &AppHandle) {
         .inner_size(380.0, 260.0)
         .resizable(false)
         .decorations(false)
+        .transparent(true)
+        // Liquid Glass material behind a transparent window (macOS 26+);
+        // Tauri falls back to the Popover vibrancy material on macOS 15
+        // and below, so the HUD wall keeps its wall blur everywhere.
+        // The CSS (hud.css) paints a matching rounded tint over the
+        // material; the radius here must track hud.css' border-radius.
+        .effects(
+            EffectsBuilder::new()
+                .effect(Effect::LiquidGlassRegular)
+                .effect(Effect::Popover)
+                .state(EffectState::Active)
+                .radius(14.0)
+                .build(),
+        )
         .always_on_top(true)
         .skip_taskbar(true)
         .focusable(false)

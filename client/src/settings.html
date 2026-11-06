@@ -6,12 +6,29 @@
   <style>
     :root {
       --surface: #f5f5f7;
+      --field: #ffffff;
       --text: #1d1d1f;
-      --text-muted: #55555a;
-      --accent: #6d5ae6;
+      --text-muted: #6e6e73;
+      --accent: #007aff;
       --accent-text: #ffffff;
-      --border: #d6d6da;
-      --error: #c0392b;
+      --focus-ring: rgba(0, 122, 255, 0.3);
+      --border: rgba(0, 0, 0, 0.12);
+      --button: rgba(118, 118, 128, 0.12);
+      --error: #d70015;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --surface: #1c1c1e;
+        --field: #2c2c2e;
+        --text: #f2f2f4;
+        --text-muted: #98989f;
+        --accent: #0a84ff;
+        --focus-ring: rgba(10, 132, 255, 0.35);
+        --border: rgba(255, 255, 255, 0.12);
+        --button: rgba(118, 118, 128, 0.24);
+        --error: #ff453a;
+      }
     }
 
     * {
@@ -36,8 +53,8 @@
     }
 
     h1 {
-      font-size: 16px;
-      font-weight: 700;
+      font-size: 15px;
+      font-weight: 600;
       margin-bottom: 8px;
     }
 
@@ -53,8 +70,8 @@
     label {
       display: block;
       margin: 12px 0 4px;
-      color: var(--text);
-      font-weight: 600;
+      color: var(--text-muted);
+      font-size: 12px;
     }
 
     input {
@@ -63,7 +80,7 @@
       padding: 8px 10px;
       border-radius: 8px;
       border: 1px solid var(--border);
-      background: #ffffff;
+      background: var(--field);
       color: var(--text);
       min-height: 32px;
     }
@@ -71,6 +88,7 @@
     input:focus {
       outline: none;
       border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--focus-ring);
     }
 
     .error {
@@ -89,8 +107,8 @@
       font: inherit;
       padding: 8px 16px;
       border-radius: 8px;
-      border: 1px solid var(--border);
-      background: transparent;
+      border: none;
+      background: var(--button);
       color: var(--text);
       cursor: pointer;
       min-height: 32px;
@@ -98,10 +116,14 @@
 
     button#save {
       background: var(--accent);
-      border-color: var(--accent);
       color: var(--accent-text);
       font-weight: 600;
       margin-left: auto;
+    }
+
+    button:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px var(--focus-ring);
     }
 
     button:disabled {

@@ -1,18 +1,34 @@
-/* Leng HUD: dark always-on-top overlay, fixed 380x260 logical px. */
+/* Leng HUD: Liquid Glass always-on-top overlay, fixed 380x260 logical px.
+   The wall blur comes from the system material set on the window in Rust
+   (LiquidGlassRegular, macOS 26+, Popover fallback); this CSS paints a
+   matching rounded tint over it. Colors follow the system appearance. */
 
 :root {
-  --hud-bg: rgba(24, 24, 28, 0.96);
-  /* Opaque twin of --hud-bg: the sticky tab row paints above the scrolling
-     text (inside the panel), so a translucent background there would let
-     one layer of text bleed through — unlike --hud-bg, which sits on the
-     opaque window base. */
-  --hud-bg-solid: #18181c;
-  --hud-surface: rgba(255, 255, 255, 0.06);
-  --hud-text: #f4f4f6;
-  --hud-text-muted: #a3a3ad;
-  --hud-accent: #6d5ae6;
-  --hud-danger: #ff8a80;
-  --hud-border: rgba(255, 255, 255, 0.12);
+  /* Thin stabilizing tint over the glass material: enough contrast for
+     solid text, transparent enough for the material to stay glass. */
+  --hud-tint: rgba(255, 255, 255, 0.22);
+  --hud-text: #1d1d1f;
+  --hud-text-muted: #55555a;
+  --hud-separator: rgba(0, 0, 0, 0.08);
+  --hud-border: rgba(255, 255, 255, 0.45);
+  /* Sticky tab band: denser than the panel tint so scrolled text stays
+     masked even if the backdrop blur is unavailable. */
+  --hud-tabs-track: rgba(252, 252, 254, 0.55);
+  --hud-segment-active: #ffffff;
+  --hud-danger: #d70015;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hud-tint: rgba(18, 18, 22, 0.26);
+    --hud-text: #f2f2f4;
+    --hud-text-muted: #a5a5ad;
+    --hud-separator: rgba(255, 255, 255, 0.1);
+    --hud-border: rgba(255, 255, 255, 0.14);
+    --hud-tabs-track: rgba(20, 20, 24, 0.55);
+    --hud-segment-active: rgba(255, 255, 255, 0.22);
+    --hud-danger: #ff453a;
+  }
 }
 
 * {
@@ -45,51 +61,59 @@ body {
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 8px 16px 16px;
-  background: var(--hud-bg);
+  padding: 10px 16px 16px;
+  background: var(--hud-tint);
   border: 1px solid var(--hud-border);
-  border-radius: 12px;
+  /* Must track the material radius set on the window in Rust. */
+  border-radius: 14px;
 }
 
-/* Tabs: «Перевод» active, «Разбор» present but disabled (MVP-2).
-   Pinned to the top of the scroll container: the tab row is the first node
-   of the Rust-rendered fragment inside #content, so without sticky it
-   scrolls away with long translations. The solid background (the opaque
-   twin of the panel token) keeps the scrolled text from bleeding through. */
+/* Tabs: «Перевод» active, «Разбор» present but disabled (MVP-2), styled as
+   a full-width macOS segmented control. Pinned to the top of the scroll
+   container: the tab row is the first node of the Rust-rendered fragment
+   inside #content, so without sticky it scrolls away with long
+   translations. The band spans the full panel width — a translucent track
+   plus a backdrop blur keeps the scrolled text from showing through. */
 .hud__tabs {
   position: sticky;
   top: 0;
-  background: var(--hud-bg-solid);
   display: flex;
-  gap: 8px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--hud-border);
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--hud-tabs-track);
+  -webkit-backdrop-filter: blur(14px) saturate(1.6);
+  backdrop-filter: blur(14px) saturate(1.6);
+  box-shadow: 0 1px 4px var(--hud-separator);
   user-select: none;
 }
 
 .hud__tab {
-  padding: 4px 8px;
-  border-radius: 6px;
+  flex: 1 1 0;
+  text-align: center;
+  padding: 3px 8px;
+  border-radius: 7px;
   font-size: 13px;
   color: var(--hud-text-muted);
 }
 
 .hud__tab--active {
   color: var(--hud-text);
-  background: var(--hud-surface);
+  background: var(--hud-segment-active);
   font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
 }
 
 .hud__tab--disabled {
   cursor: default;
-  opacity: 0.5;
+  opacity: 0.45;
 }
 
 .hud__content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding-top: 16px;
+  padding-top: 14px;
 }
 
 .hud__loading {
@@ -102,8 +126,8 @@ body {
 .hud__spinner {
   width: 24px;
   height: 24px;
-  border: 3px solid var(--hud-surface);
-  border-top-color: var(--hud-accent);
+  border: 3px solid var(--hud-tabs-track);
+  border-top-color: var(--hud-text-muted);
   border-radius: 50%;
   animation: hud-spin 0.8s linear infinite;
 }
@@ -125,13 +149,15 @@ body {
   overflow-wrap: anywhere;
   font-size: 16px;
   line-height: 1.4;
+  letter-spacing: -0.01em;
 }
 
 .hud__notes {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
   padding-left: 20px;
   color: var(--hud-text-muted);
   font-size: 12px;
+  line-height: 1.45;
 }
 
 .hud__notes li + li {
