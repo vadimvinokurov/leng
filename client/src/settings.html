@@ -134,9 +134,13 @@
     const errorLine = document.getElementById("error");
 
     (async () => {
-      const settings = await tauri.core.invoke("get_backend_settings");
-      if (settings.base_url !== null) url.value = settings.base_url;
-      if (settings.api_token !== null) token.value = settings.api_token;
+      try {
+        const settings = await tauri.core.invoke("get_backend_settings");
+        if (settings.base_url !== null) url.value = settings.base_url;
+        if (settings.api_token !== null) token.value = settings.api_token;
+      } catch (err) {
+        errorLine.textContent = "не удалось прочитать настройки: " + err;
+      }
     })();
 
     document.getElementById("cancel").addEventListener("click", () => {

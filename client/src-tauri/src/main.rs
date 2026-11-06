@@ -632,8 +632,9 @@ fn open_settings_window(app: &AppHandle) {
     let window =
         WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::App("settings.html".into()))
             .title("Leng — Настройки")
-            .inner_size(440.0, 260.0)
-            .resizable(false)
+            .inner_size(460.0, 440.0)
+            .min_inner_size(460.0, 400.0)
+            .resizable(true)
             .build();
     if let Err(err) = window {
         eprintln!("leng: failed to open settings window: {err}");
