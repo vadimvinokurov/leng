@@ -39,6 +39,7 @@ Only rules that override every other section when in conflict live here. Anythin
 - If you find yourself adding "for future extensibility", stop. Future extensibility is a future decision.
 - Prefer stable, widely used libraries. Before adding anything, check what the project already uses — the conventional solution usually covers it.
 - Do not add a new dependency without the user's explicit approval and a justification of why the conventional approach is not enough.
+- Prefer a proven dependency over hand-rolled code. If an existing, maintained library covers the need, use it (with the user's approval, as required above) rather than writing your own version of it. Hand-rolling in place of such a library is the exception and must be explicitly justified — tiny required surface, ownership/control of critical behavior, real incompatibility — never silently and never by preference.
 - Bias toward deleting code over adding code. Shipping less is almost always better.
 
 The test: would a senior engineer reading the diff call this overcomplicated? If yes, simplify.
