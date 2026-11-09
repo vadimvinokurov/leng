@@ -26,8 +26,8 @@ use leng_core::config::{
 use leng_core::guard::GenerationGuard;
 use leng_core::pipeline::{process, Hud, HudPayload};
 use leng_core::platform::macos::{
-    install_dismiss_monitor, install_event_monitor, permission_granted,
-    request_accessibility_permission, source_info, DismissEvent,
+    force_order_front, install_dismiss_monitor, install_event_monitor, permission_granted,
+    request_accessibility_permission, set_fullscreen_overlay, source_info, DismissEvent,
 };
 use leng_core::platform::source::SourceInfo;
 use leng_core::trigger::DoubleTap;
@@ -489,7 +489,12 @@ fn dismiss_hud(app: &AppHandle, dismiss: DismissEvent) {
 /// dismissal must supersede late payloads).
 fn dismiss_destroy(app: &AppHandle, window: &tauri::WebviewWindow) {
     app.state::<AppState>().generation.lock().unwrap().start();
-    let _ = window.destroy();
+    // The HUD window lives as a re-classed NSPanel (see open_hud), and
+    // `destroy()`ing it throws a foreign AppKit exception inside tao/wry and
+    // aborts the app (found live: both Escape and outside-click dismissals
+    // died here). Hide it instead — the window survives, and `open_hud`'s
+    // reuse path (show + reload + orderFrontRegardless) re-serves it.
+    let _ = window.hide();
 }
 
 /// Open the HUD at the current cursor position in its loading (spinner)
@@ -514,6 +519,12 @@ fn open_hud(app: &AppHandle) {
         }
         let _ = existing.eval("window.location.reload()");
         let _ = existing.show();
+        // Re-order front for the active Space even when the window exists: see
+        // the comment below on why `show()` alone is not enough.
+        if let Ok(ns_window) = existing.ns_window() {
+            // SAFETY: tauri returns a live NSWindow pointer.
+            unsafe { force_order_front(ns_window) };
+        }
         return;
     }
     let window = WebviewWindowBuilder::new(app, HUD_LABEL, WebviewUrl::App("hud.html".into()))
@@ -548,6 +559,18 @@ fn open_hud(app: &AppHandle) {
             return;
         }
     };
+    // macOS pins a window to the Space it was created on, and a plain NSWindow
+    // is never admitted into a foreign fullscreen Space regardless of its
+    // collection behavior or window level, where only a non-activating NSPanel
+    // is allowed (each fullscreen app window is its own Space). The re-class
+    // and flags are set before the first show() — before, since the panel must
+    // exist as a panel while it is off-screen on Desktop 1. The changes live on
+    // the NSWindow for its lifetime, so the reuse path above needs no
+    // re-application.
+    if let Ok(ns_window) = window.ns_window() {
+        // SAFETY: tauri returns a live NSWindow pointer.
+        unsafe { set_fullscreen_overlay(ns_window) };
+    }
     if let Ok(cursor) = app.cursor_position() {
         let _ = window.set_position(PhysicalPosition::new(
             cursor.x.round() as i32,
@@ -570,6 +593,13 @@ fn open_hud(app: &AppHandle) {
         }
     });
     let _ = window.show();
+    // tao shows windows with makeKeyAndOrderFront:, which for an inactive app
+    // does not reliably surface the window into the frontmost Space;
+    // orderFrontRegardless does (a non-activating panel never becomes key).
+    if let Ok(ns_window) = window.ns_window() {
+        // SAFETY: tauri returns a live NSWindow pointer.
+        unsafe { force_order_front(ns_window) };
+    }
 }
 
 /// The pipeline's HUD sink for one trigger's generation: payloads of a stale
@@ -613,9 +643,22 @@ fn commit_payload(app: &AppHandle, token: u64, payload: HudPayload) {
         // Current token + no window means the window was destroyed without
         // a dismissal — e.g. `open_hud`'s builder failed at trigger time and
         // nothing else has run since — so opening it here is the fallback
-        // that still surfaces this payload.
-        open_hud(app);
+        // that still surfaces this payload. `open_hud` (AppKit window work)
+        // must run on the main thread, while this fn also runs on a tokio
+        // worker (from the async pipeline's spawn), so it is dispatched.
+        // The payload is stored BEFORE the dispatch: the dispatched
+        // `open_hud` clears `last_payload` when it builds the window, and
+        // the new page replays whatever is stored on `READY_EVENT`.
+        let json = serde_json::to_string(&payload).expect("HudPayload serialization cannot fail");
+        let state = app.state::<AppState>();
+        *state.last_payload.lock().unwrap() = Some(json);
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || open_hud(&handle));
+        return;
     }
+    // The HUD window already exists: deliver directly. (The discarded
+    // fullscreen-Space commit lost this path — payloads were dropped and the
+    // HUD spun forever.)
     let json = serde_json::to_string(&payload).expect("HudPayload serialization cannot fail");
     let state = app.state::<AppState>();
     *state.last_payload.lock().unwrap() = Some(json.clone());

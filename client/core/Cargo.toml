@@ -1,6 +1,6 @@
 [package]
 name = "leng-core"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2021"
 
 [[bin]]
@@ -19,7 +19,14 @@ serde_json = "1"
 [dev-dependencies]
 wiremock = "0.6"
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-foundation = "0.3"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSEvent", "NSRunningApplication", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSEvent", "NSPanel", "NSRunningApplication", "NSWindow", "NSWorkspace"] }
+
+[[test]]
+name = "macos_window_spaces"
+harness = false

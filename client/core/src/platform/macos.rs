@@ -9,10 +9,13 @@
 //! explicitly authorized in the Task 14 brief.
 //!
 //! Nothing here is unit-testable (AppKit / Accessibility / the scripting
-//! bridge are system services); the pure part of the contract — the
-//! AppleScript output parser — lives in [`crate::platform::source::parse_tab`]
-//! and is covered by `tests/source_parse.rs`. The rest is verified against
-//! the manual checklist (PROJECT.md §11.2 item 7).
+//! bridge are system services) except [`set_fullscreen_overlay`] — its
+//! NSWindow re-class and flags are covered by `tests/macos_window_spaces.rs`;
+//! the pure
+//! part of the contract — the AppleScript output parser — lives in
+//! [`crate::platform::source::parse_tab`] and is covered by
+//! `tests/source_parse.rs`. The rest is verified against the manual
+//! checklist (PROJECT.md §11.2 item 7).
 
 use std::os::raw::{c_char, c_uchar, c_void};
 use std::process::Command;
@@ -22,12 +25,22 @@ use std::time::{Duration, Instant};
 use block2::RcBlock;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
-    NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSWorkspace,
+    NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSPanel,
+    NSScreenSaverWindowLevel, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
 };
 
 use crate::platform::source::{
     parse_tab, run_bounded_process, source_kind, tab_script, BrowserKind, SourceInfo,
 };
+
+extern "C" {
+    // Not re-exported by objc2 as a callable with our types; see the
+    // `tauri-nspanel` plugin for the same technique.
+    fn object_setClass(
+        obj: *mut objc2::runtime::AnyObject,
+        cls: *const objc2::runtime::AnyClass,
+    ) -> *const objc2::runtime::AnyClass;
+}
 
 /// Virtual keycode of ANSI `C` (kVK_ANSI_C). Layout-independent: on a non-US
 /// layout the physical C key produces e.g. a Cyrillic character, so matching
@@ -380,19 +393,25 @@ pub enum DismissEvent {
     Escape,
 }
 
-/// Observe-only global monitor covering the HUD's dismissal contract.
+/// Observe-only monitors covering the HUD's dismissal contract, global and app-local.
 ///
-/// The HUD window does not take focus on macOS (tauri `focusable(false)`
-/// makes the window never key), so it never receives an Escape keydown or a
-/// real blur through its webview. The dismissal contract ("close on Escape
-/// and on losing focus") is therefore met by watching global events instead:
-/// this monitor reports Escape presses and left mouse-downs delivered to
-/// *other* applications, and the tauri side decides (the click needs a
-/// inside/outside geometry check against the HUD frame).
+/// The HUD window is a non-activating panel that normally never becomes key,
+/// so it does not receive an Escape keydown or a real blur through its
+/// webview. The dismissal contract ("close on Escape and on losing focus")
+/// is therefore met by watching events: the *global* monitor reports Escape
+/// presses and left mouse-downs delivered to *other* applications, and the
+/// tauri side decides (the click needs an inside/outside geometry check
+/// against the HUD frame). Should the panel ever take key status (a click
+/// making the webview the first responder), Escape is delivered to this app
+/// instead — where the *local* monitor picks it up. The local monitor
+/// intentionally ignores clicks: a mouse-down inside the HUD is an
+/// interaction with it, not a dismissal. Both monitors together give one
+/// Escape handler for every app that could hold focus.
 ///
 /// Requires Accessibility permission like [`install_event_monitor`]. Must be
 /// called on the main thread.
-pub fn install_dismiss_monitor(on_dismiss: impl Fn(DismissEvent) + Send + 'static) {
+pub fn install_dismiss_monitor(on_dismiss: impl Fn(DismissEvent) + Send + Clone + 'static) {
+    let on_dismiss_local = on_dismiss.clone();
     let handler = RcBlock::new(move |event: NonNull<NSEvent>| {
         // SAFETY: same non-null / handler-lifetime argument as above.
         let event: &NSEvent = unsafe { &*event.as_ptr() };
@@ -409,8 +428,104 @@ pub fn install_dismiss_monitor(on_dismiss: impl Fn(DismissEvent) + Send + 'stati
     });
 
     MainThreadMarker::new().expect("install_dismiss_monitor must be called on the main thread");
+    // Observe-only: the returned monitor tokens are never removed — the HUD
+    // app keeps the monitors for its whole lifetime.
     NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
         NSEventMask::KeyDown | NSEventMask::LeftMouseDown,
         &handler,
     );
+    // Intercepts the Escape keydowns delivered to this app itself (see doc).
+    // A local monitor's handler must return the event to keep delivery, so
+    // this one is its own block even though it dispatches like the global.
+    let local_handler = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: same non-null / handler-lifetime argument as above.
+        let event: &NSEvent = unsafe { &*event.as_ptr() };
+        if event.r#type() == NSEventType::KeyDown && event.keyCode() == KEY_CODE_ESCAPE {
+            on_dismiss_local(DismissEvent::Escape);
+        }
+        std::ptr::NonNull::from(event).as_ptr()
+    });
+    // SAFETY: the handler block outlives the monitor (leaked on purpose,
+    // like the global one above); the mask/type argument is valid.
+    unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &local_handler)
+    };
+}
+
+/// Reclass an NSWindow into an `NSPanel` with the flags required to appear on
+/// every Space, including another app's native fullscreen one.
+///
+/// macOS pins a window to the Space it was created on unless it joins all
+/// spaces, and each fullscreen app window is its own Space, so an HUD window
+/// built on Desktop 1 never follows a trigger from a fullscreen app. Flags
+/// alone are not enough: on current macOS a plain `NSWindow` is never
+/// admitted into a foreign fullscreen Space at all, regardless of
+/// collection behavior or window level — only a non-activating `NSPanel` is
+/// (the same technique the `tauri-nspanel` plugin uses). The re-class is
+/// memory-safe because `NSPanel` adds no instance variables over `NSWindow`
+/// (identical instance size, verified on this OS).
+///
+/// `Stationary` keeps the panel where it is during Space switches,
+/// `NSScreenSaverWindowLevel` floats it above fullscreen app content, and
+/// `hidesOnDeactivate` must be flipped off since panels hide by default when
+/// the owning app deactivates — and this app always is deactivated when the
+/// HUD shows.
+///
+/// # Safety
+///
+/// `ns_window` must be a valid NSWindow pointer handed out by tauri's
+/// `ns_window()` (or null). Call on the main thread.
+pub unsafe fn set_fullscreen_overlay(ns_window: *mut c_void) {
+    if ns_window.is_null() {
+        return;
+    }
+    // SAFETY: the caller hands out a live NSWindow pointer (tauri's
+    // `ns_window()`); we only borrow it for the message sends, on the main
+    // thread.
+    let window: &NSWindow = unsafe { &*ns_window.cast() };
+    // SAFETY: `object_setClass` swaps the object's class in place; the
+    // instance size does not shrink (tao's TaoWindow subclasses NSWindow and
+    // adds its own ivar, NSPanel adds none), and no TaoWindow-only method or
+    // ivar is touched afterwards: `canBecomeKeyWindow`/`canBecomeMainWindow`
+    // were the only TaoWindow overrides that matter and a borderless panel
+    // answers both with NO, matching the HUD's focusable(false).
+    unsafe {
+        object_setClass(
+            window as *const NSWindow as *mut objc2::runtime::AnyObject,
+            objc2::class!(NSPanel),
+        );
+    }
+    window.setStyleMask(window.styleMask() | NSWindowStyleMask::NonactivatingPanel);
+    window.setHidesOnDeactivate(false);
+    let panel: &NSPanel = unsafe { &*ns_window.cast() };
+    panel.setBecomesKeyOnlyIfNeeded(true);
+    panel.setFloatingPanel(true);
+    window.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary
+            | NSWindowCollectionBehavior::Stationary,
+    );
+    window.setLevel(NSScreenSaverWindowLevel);
+}
+
+/// Order an NSWindow front over whatever Space is active, without activating
+/// its (always inactive) app.
+///
+/// tao shows windows with `makeKeyAndOrderFront:`, which ties the order to
+/// key-window rules; `orderFrontRegardless` is the reliable way to surface a
+/// background app's panel into the frontmost Space (including a foreign
+/// fullscreen one) mid-interaction.
+///
+/// # Safety
+///
+/// `ns_window` must be a valid NSWindow pointer handed out by tauri's
+/// `ns_window()` (or null). Call on the main thread.
+pub unsafe fn force_order_front(ns_window: *mut c_void) {
+    if ns_window.is_null() {
+        return;
+    }
+    // SAFETY: the caller hands out a live NSWindow pointer (tauri's
+    // `ns_window()`); we only borrow it for the message send.
+    let window: &NSWindow = unsafe { &*ns_window.cast() };
+    window.orderFrontRegardless();
 }
